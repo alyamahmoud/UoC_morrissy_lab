@@ -1,0 +1,6 @@
+library (XenofilteR)
+setwd('/work/morrissy_lab/TFRI_2018_data/bamrnacopy/XenofilteR/mouse_human_data/')
+samples <- list.files(path = './', pattern = '.bam$')
+sample_list <- data.frame(samples[1], samples[2])
+bp.param <- SnowParam(workers = 20, type = "SOCK")
+XenofilteR(sample_list, destination.folder = "./", bp.param = bp.param, output.names = NULL)
