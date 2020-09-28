@@ -1,0 +1,122 @@
+---
+title: "correlation_proteomics_vs_transcriptomics"
+author: "am"
+date: "21/02/2020"
+output: html_document
+---
+```{r}
+library (reshape2)
+library (tibble)
+library (tidyverse)
+library(ggplot2)
+library(ggrepel)
+library(plotly)
+
+```
+
+
+```{r}
+# load objects at ~/Desktop/CIHR_sorana/
+rnaseq_nofilter = readRDS('~/Desktop/CIHR_sorana/rnaseq_nofilter_dat.Rds')
+proteomics_8_18=readRDS('~/Desktop/CIHR_sorana/proteomics_8_18_dat.Rds')
+
+select = intersect(rownames(rnaseq_nofilter), rownames(proteomics_8_18))
+df_1 = rnaseq_nofilter[select, ]; df_1 = rownames_to_column(df_1, var = 'regulons')
+df_2 = proteomics_8_18[select, ]; df_2 = rownames_to_column(df_2, var = 'regulons')
+
+# summarise proteomics data by replicates mean
+tmp = NULL; tmp = df_2; tmp = mutate(tmp, F4mean=rowMeans(select(tmp, starts_with("F4")), na.rm = TRUE))
+tmp = mutate(tmp, F5mean=rowMeans(select(tmp, starts_with("F5")), na.rm = TRUE))
+tmp = mutate(tmp, F6mean=rowMeans(select(tmp, starts_with("F6")), na.rm = TRUE))
+tmp = mutate(tmp, F7mean=rowMeans(select(tmp, starts_with("F7")), na.rm = TRUE))
+tmp = mutate(tmp, F8mean=rowMeans(select(tmp, starts_with("F8")), na.rm = TRUE))
+keep = c('regulons', 'F4mean', 'F5mean', 'F6mean', 'F7mean', 'F8mean')
+tmp = tmp[, colnames(tmp) %in% keep]; df_2 = tmp
+df_2 = tmp;
+
+tmp = NULL; 
+tmp = df_1; tmp = mutate(tmp, SMP18_P1mean=rowMeans(select(tmp, starts_with("SMP18_P")), na.rm = TRUE))
+tmp = mutate(tmp, SMP18_R1mean=rowMeans(select(tmp, starts_with("SMP18_R1")), na.rm = TRUE))
+tmp = mutate(tmp, SMP8_Pmean=rowMeans(select(tmp, starts_with("SMP8_P")), na.rm = TRUE))
+tmp = mutate(tmp, SMP8_R1mean=rowMeans(select(tmp, starts_with("SMP8_R1")), na.rm = TRUE))
+tmp = mutate(tmp, SMP8_R2mean=rowMeans(select(tmp, starts_with("SMP8_R2")), na.rm = TRUE))
+keep = c('regulons', 'SMP18_P1mean', 'SMP18_R1mean', 'SMP8_Pmean', 'SMP8_R1mean', 'SMP8_R2mean')
+tmp = tmp[, colnames(tmp) %in% keep]; df_1 = tmp
+df_1 = tmp;
+
+
+df_1 = reshape2::melt(df_1)
+df_2 = reshape2::melt(df_2)
+colnames(df_1) = c('regulons', 'patients', 'transcriptomics')
+colnames(df_2) = c('regulons', 'patients', 'proteomics')
+cor.test(df_1$transcriptomics, df_2$proteomics)
+
+
+pdf ('~/Desktop/CIHR_sorana/transcriptomics_vs_proteomics.pdf', width = 15, height = 5)
+p = ggplot(df, aes(x = regulons, y = value, fill = data_type)) + 
+  geom_boxplot()
+p
+dev.off()
+```
+
+```{r}
+#test_1 = df_1[,-2]
+#test_2 = df_2[, -2]
+#test_1= df_1[df_1$regulons == 'YY1', ]
+#test_2 = df_2[df_2$regulons == 'YY1', ]
+
+#for (i in 1:100) {
+#  tmp <- combinations(20,5, test_1$transcriptomics, repeats.allowed = TRUE)
+#  print (tmp) 
+#}
+#colMeans(tmp)
+
+#for (i in 1:10) {
+#  tmp=sample(test_1$transcriptomics, 5)
+#  f = cor.test(tmp, test_2$proteomics)
+#  print (f$estimate)
+  #print (f$p.value)
+#}
+
+
+# test correlation
+df = inner_join(df_1, df_2, by = 'regulons')
+df$labels = paste(df$patients.x, df$patients.y, sep = '_')
+pdf ('~/Desktop/CIHR_sorana/corr_regulons_proteomics_vs_transcriptomics/data.pdf', width=4, height = 2)
+# scatter plot
+p <- ggplot(df, aes(x =transcriptomics, y = proteomics, color = regulons, label = labels)) + 
+  geom_point() 
+p <- ggplotly(p)  
+p
+#geom_smooth(methos='lm', se = FALSE)
+dev.off()
+
+ggplot(df, aes(x= transcriptomics, y = proteomics, label = labels, color = regulons)) + 
+  geom_point(color = dplyr::case_when(df$transcriptomics > 1 ~ "#1b9e77", 
+                                      df$transcriptomics < -1 ~ "#d95f02",
+                                      TRUE ~ "#7570b3"), 
+             size = 3, alpha = 0.8) +
+  geom_text_repel(data          = subset(df, transcriptomics > 1.4),
+                  nudge_y       = 32 - subset(df, transcriptomics > 1.4)$transcriptomics,
+                  size          = 4,
+                  box.padding   = 1.5,
+                  point.padding = 0.5,
+                  force         = 100,
+                  segment.size  = 0.2,
+                  segment.color = "grey50",
+                  direction     = "x") +
+  geom_label_repel(data         = subset(df, transcriptomics < -1.2),
+                  nudge_y       = 16 - subset(df, transcriptomics < -1.2)$transcriptomics,
+                  size          = 4,
+                  box.padding   = 0.5,
+                  point.padding = 0.5,
+                  force         = 100,
+                  segment.size  = 0.2,
+                  segment.color = "grey50",
+                  direction     = "x") +
+  scale_x_continuous(expand = expand_scale(mult = c(0.2, .2))) +
+  scale_y_continuous(expand = expand_scale(mult = c(0.1, .1))) +
+  theme_classic(base_size = 16)
+
+```
+

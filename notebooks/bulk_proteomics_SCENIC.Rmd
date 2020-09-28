@@ -1,0 +1,105 @@
+---
+title: "bulk_proteomics_SCENIC"
+author: "am"
+date: "19/02/2020"
+output: html_document
+---
+```{r}
+# import data
+library (tidyverse)
+dat <- readr::read_csv ('~/Documents/GRNs/data/tumor_data/proteomics_data/for_scenic/All_log2fc.csv')
+dat <- column_to_rownames(dat, var= 'Gene')
+```
+
+```{r}
+scenic_in = dat; 
+### Initialize settings
+org="hgnc" # or mgi, or dmel
+dbDir="~/Documents/GRNs/data/tumor_data/cisTarget_databases/" # RcisTarget databases location
+myDatasetTitle="SCENIC on bulk proteomics" 
+data(defaultDbNames)
+#dbs <- defaultDbNames[[org]]
+dbs = c("hg38__refseq-r80__10kb_up_and_down_tss.mc9nr.feather", "hg38__refseq-r80__500bp_up_and_100bp_down_tss.mc9nr.feather")
+names(dbs)[1] = c("10kb")
+names(dbs)[2] = c("500bp")
+dir.create('~/Documents/GRNs/data/tumor_data/proteomics_data/int/')
+scenicOptions <- initializeScenic(org=org, dbDir=dbDir, dbs=dbs, datasetTitle=myDatasetTitle, nCores=10)
+saveRDS(scenicOptions, file = '~/Documents/GRNs/data/tumor_data/proteomics_data/int/scenicOptions.Rds')
+```
+
+
+```{r}
+# cell annotation
+cellInfo = data.frame(colnames(dat))
+
+cellInfo$patient = c(rep ('SMP20', 8), rep ('SMP21', 8), rep('SMP20', 1), rep ('SMP21', 1), rep ('SMP20', 2), rep ('SMP21', 2), rep ('SMP20', 1), rep ('SMP21', 1), rep ('SMP18', 16), rep ('SMP8', 24))
+
+cellInfo$progress = c(rep ('P', 28), rep ('R1', 4), rep('P', 4), rep ('R1', 4), rep ('P', 2), rep ('R1', 4), rep ('R2', 6), rep ('P', 2), rep ('R1', 4), rep ('R2', 6))
+
+saveRDS(cellInfo, '~/Documents/GRNs/data/tumor_data/proteomics_data/int/cellInfo.Rds')
+```
+
+```{r}
+# subset SMP8/18 vs SMP20/21
+dat_1 = dat[, cellInfo$colnames.dat.[cellInfo$patient=='SMP20' | cellInfo$patient =='SMP21']]
+dat_1 = na.omit(dat_1)
+dat_2 = dat[, cellInfo$colnames.dat.[cellInfo$patient=='SMP18' | cellInfo$patient =='SMP8']]
+dat_2 = na.omit(dat_2)
+```
+
+```{r}
+### Co-expression network
+#genesKept <- geneFiltering(exprMat, scenicOptions)
+#exprMat_filtered <- exprMat[genesKept, ]
+scenic_in = dat_2
+exprMat_filtered <- scenic_in
+exprMat <- scenic_in
+runCorrelation(exprMat_filtered, scenicOptions)
+#exprMat_filtered_log <- log2(exprMat_filtered+1) 
+exprMat_filtered_log <- scenic_in
+runGenie3(as.matrix(exprMat_filtered_log), scenicOptions)
+
+### Build and score the GRN
+#exprMat_log <- log2(exprMat+1)
+exprMat_log <- scenic_in
+#logMat <- log2(exprMat+1)
+logMat <- scenic_in
+scenicOptions <- readRDS("~/Documents/GRNs/data/tumor_data/proteomics_data/int/scenicOptions.Rds")
+scenicOptions@settings$verbose <- TRUE
+scenicOptions@settings$nCores <- 10
+scenicOptions@settings$seed <- 123
+scenicOptions@inputDatasetInfo$cellInfo <- "int/cellInfo.Rds"
+# For a very quick run: 
+# coexMethod=c("top5perTarget")
+scenicOptions@settings$dbs <- scenicOptions@settings$dbs["10kb"] # For toy run
+
+
+  runSCENIC_1_coexNetwork2modules(scenicOptions)
+  runSCENIC_2_createRegulons(scenicOptions, coexMethod=c("top5perTarget")) #** Only for toy run!!
+  runSCENIC_3_scoreCells(scenicOptions, as.matrix(logMat))
+```
+
+```{r}
+# import scenic ouput (auc activity scores and regulon-gene sets)
+auc= readRDS('~/Documents/GRNs/data/tumor_data/proteomics_data/int_smp8_smp18/3.4_regulonAUC.Rds')
+regulons = readRDS('~/Documents/GRNs/data/tumor_data/proteomics_data/int_smp8_smp18/2.6_regulons_asGeneSet.Rds')
+cellInfo = readRDS('~/Documents/GRNs/data/tumor_data/proteomics_data/int/cellInfo.Rds') %>%
+  column_to_rownames(var= 'colnames.dat.')
+```
+
+```{r}
+# check expression of regulons for invidiual samples and for tumor samples in one run
+dat = data.frame(auc@assays@data@listData$AUC) # str(auc)
+rownames(dat) = sapply(strsplit(rownames(dat), " "), head, 1)
+#dat <- dat[, sapply(dat, var) !=0]
+
+
+pdf ('~/Documents/GRNs/data/tumor_data/proteomics_data/int_smp8_smp18/proteomics_1.pdf', width = 7, height = 4)
+dat = na.omit(t(scale(t(as.matrix(dat)), center = T, scale=T)))
+pheatmap::pheatmap(dat, fontsize_row=6, color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),treeheight_row=10, treeheight_col=10, border_color=NA,  clustering_method = "ward.D2", fontsize_col = 6)
+dev.off()
+```
+```{r}
+dat = read_csv('~/Documents/GRNs/data/tumor_data/proteomics_data/for_scenic/All_log2fc_innerjoin.csv')
+```
+

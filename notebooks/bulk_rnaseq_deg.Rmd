@@ -1,0 +1,126 @@
+---
+title: "comparing_gene_expression_level_of_target_genes, SMPs"
+author: "am"
+date: "14/02/2020"
+output: html_document
+---
+## this is to compare expression level of target genes in regulons derived from analysing individual patients vs two patients comobined through the SCENI pipeline
+
+## SCENIC was run on arc, scripts run_SCENIC.slurm calls SCENIC_bulk_rnaseq.R
+
+```{r}
+# import scenic ouput (auc activity scores and regulon-gene sets)
+#auc_smp8 = readRDS('Documents/GRNs/data/tumor_data/int_smp8/3.4_regulonAUC.Rds')
+#auc_smp18 = readRDS('Documents/GRNs/data/tumor_data/int_smp18/3.4_regulonAUC.Rds')
+auc_tumor = readRDS('~/Documents/GRNs/data/tumor_data/rnaseq_data/int_bulk_samples_deg/3.4_regulonAUC.Rds')
+
+#regulons_smp8 = readRDS('Documents/GRNs/data/tumor_data/int_smp8/2.6_regulons_asGeneSet.Rds')
+#regulons_smp18 = readRDS('Documents/GRNs/data/tumor_data/int_smp18/2.6_regulons_asGeneSet.Rds')
+regulons_tumor = readRDS('~/Documents/GRNs/data/tumor_data/rnaseq_data/int_bulk_samples_deg/2.6_regulons_asGeneSet.Rds')
+```
+
+```{r}
+# DESeq2 analysis for bulk tumor data
+# read raw read counts
+library (magrittr)
+library (tidyverse)
+library (tibble)
+
+dat = read.delim ('~/Documents/GRNs/data/tumor_data/rnaseq_data/SMP_merged.ensg_name_protein.gencodev32', stringsAsFactors = FALSE)
+
+# DESeq2
+dat$Gene= sapply(strsplit(dat$Gene, split="_", fixed=TRUE), function(x) x[1])
+dat_summarized=dat%>%
+  group_by(Gene) %>%
+  arrange_all() %>%
+  filter(row_number() == n())
+
+dat = column_to_rownames(dat_summarized, var = 'Gene')
+colData = data.frame(colnames(dat))
+colData$patient = c(rep ('SMP18', 8), rep ('SMP8', 12))
+colData = column_to_rownames(colData, var = 'colnames.dat.')
+colData$progress = c(rep ('P1', 4), rep ('R1', 4), rep ('P1', 2), rep ('R1', 4), rep ('R2', 6))
+# run DESeq2
+library (DESeq2)
+dds = DESeqDataSetFromMatrix(countData=dat, colData = colData, design = ~progress+patient)
+keep = rowSums(counts(dds)) >=10
+dds <- dds[keep, ]
+dds = DESeq(dds)
+resultsNames(dds)
+res=results(dds, name="patient_SMP8_vs_SMP18")
+res05 <- results(dds, alpha=0.05)
+summary(res05)
+sum(res05$padj < 0.05, na.rm=TRUE)
+res_05 <- subset(res, padj < 0.05)
+# examine counts for single genes across groups patient/progress
+plotCounts(dds, gene=which.min(res$padj), intgroup="progress")
+d <- plotCounts (dds, gene=which.min(res$padj), intgroup="progress", returnData = TRUE)
+ggplot(d, aes(x=progress, y=count)) +
+  geom_point(position=position_jitter(w=0.1, h=0)) +
+  scale_y_log10(breaks=c(25,100,400))
+# transformation
+vsd <- vst(dds, blind=FALSE)
+rld <- rlog(dds, blind=FALSE)
+# visualise transformation effect
+ntd <- normTransform(dds)
+library ("vsn")
+meanSdPlot(assay(ntd))
+meanSdPlot(assay(vsd)) # looks best
+meanSdPlot(assay(rld))
+# data quality assessment by sample clustering 
+library (pheatmap)
+select <- order(rowMeans(counts(dds,normalized=TRUE)),
+                decreasing=TRUE)[1:20]
+df <- as.data.frame(colData(dds)[,c("progress","patient")])
+pheatmap(assay(ntd)[select,], cluster_rows=FALSE, show_rownames=FALSE, cluster_cols=FALSE, annotation_col=df)
+pheatmap(assay(rld)[select,], cluster_rows=FALSE, show_rownames=FALSE, cluster_cols=FALSE, annotation_col=df)
+pheatmap(assay(vsd)[select,], cluster_rows=FALSE, show_rownames=FALSE, cluster_cols=FALSE, annotation_col=df)
+# sample-to-sample distance
+sampleDists <- dist(t(assay(vsd)))
+library("RColorBrewer")
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd$progress, vsd$patient, sep="-")
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+# PCA
+plotPCA(vsd, intgroup =c("progress"))
+plotPCA(rld, intgroup =c("progress"))
+pcaData <- plotPCA(vsd, intgroup=c("patient", "progress"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color=patient, shape=progress)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + coord_fixed()
+
+```
+
+```{r}
+# check expression of regulons for invidiual samples and for tumor samples in one run
+dat = data.frame(auc_tumor@assays$data@listData)
+rownames(dat) = sapply(strsplit(rownames(dat), " "), head, 1)
+tmp <- sapply(strsplit(colnames(dat), "[.]"), head, 2); tmp = tmp[-1, ]; colnames(dat) = tmp
+
+pdf ('~/Documents/GRNs/data/tumor_data/rnaseq_data/int_bulk_samples_deg/Step3_RegulonActivity_heatmap_regulonAUC.pdf', height = 9, width = 5)
+dat = na.omit(t(scale(t(as.matrix(dat)), center = T, scale=T)))
+colnames(dat) <- gsub ("ReadsPerGene", "", colnames(dat))
+rownames(colData) <- gsub ("ReadsPerGene.out.tab", "", rownames(colData))
+pheatmap::pheatmap(dat, fontsize_row=5, color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = colData, clustering_method = "ward.D2", fontsize_col = 6)
+dev.off()
+```
+```{r}
+# remove the word extended and them remove duplicated 
+rnaseq_deg_dat = dat
+rnaseq_deg_dat <- data.frame(rnaseq_deg_dat) 
+rnaseq_deg_dat <- rownames_to_column(rnaseq_deg_dat) 
+rnaseq_deg_dat$rowname <- gsub ("_extended",  "", rnaseq_deg_dat$rowname)
+rnaseq_deg_dat <- rnaseq_deg_dat[!duplicated (rnaseq_deg_dat$rowname), ]; rownames(rnaseq_deg_dat) = NULL; 
+rnaseq_deg_dat <- column_to_rownames(rnaseq_deg_dat, var = 'rowname')
+pdf ('~/Documents/GRNs/data/tumor_data/rnaseq_data/int_bulk_samples_deg/Step3_RegulonActivity_heatmap_regulonAUC_mod_labels.pdf', height = 9, width = 5)
+pheatmap::pheatmap(rnaseq_deg_dat, fontsize_row=5, color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = colData, clustering_method = "ward.D2", fontsize_col = 6)
+dev.off()
+```
+

@@ -1,0 +1,519 @@
+---
+title: "TFRI_am01_analysis"
+author: "am"
+date: "18/03/2020"
+output: html_document
+---
+
+```{r, include = FALSE, results = FALSE, results = 'hide'}
+library (magrittr)
+library(ggVennDiagram)
+library (tidyverse)
+library (tibble)
+library (rnaseqWrapper)
+library (pheatmap)
+library (vsn)
+library (DESeq2)
+library(RColorBrewer)
+library (ggfortify)
+library(EnsDb.Hsapiens.v79)
+library (SCENIC)
+library (DEXSeq)
+library (tidyverse)
+library (dplyr)
+library (BiocParallel)
+library (NMF)
+library (IntNMF)
+```
+
+```{r genes, include=FALSE, results=FALSE}
+# read counts data
+setwd('~/Documents/GRNs/BITC/data/gene_counts')
+
+#countFiles = list.files(path='data/', pattern = '*-ReadsPerGene.out.tab')
+directory = '~/Documents/GRNs/BITC/data/gene_counts'
+dat <- mergeCountFiles(fileDir = directory, fileID = "*-ReadsPerGene.out.tab", fileSep = "\t", seqIDcol = 1, colsToKeep = 1:2)
+tmp <- grep (pattern = "\\.1", colnames(dat))
+cols_to_remove = colnames(dat)[tmp]
+dat <- dat[, !colnames(dat) %in% cols_to_remove]
+
+# clean colnames
+colnames(dat) <-sapply(strsplit(colnames(dat), split=".", fixed=TRUE), function(x) x[1])
+  
+# metadata
+bams2ptID <- read_tsv('~/Documents/GRNs/BITC/data/bams2patientID.txt')
+metadata <- read_tsv('~/Documents/GRNs/BITC/data/metadata_BTIC_pnas'); colnames(metadata)[1] = c('patient_ID')
+
+# merge metadata with bams
+sampleTable <- full_join(bams2ptID, metadata, by='patient_ID')
+
+# keep only data for which we have counts
+sampleTable$bam_ID <- sapply(strsplit(sampleTable$bam_ID, split="-ReadsPerGene", fixed=TRUE), function(x)x[1])
+sampleTable <- sampleTable[sampleTable$bam_ID %in% colnames(dat), ]
+```
+
+```{r, echo=FALSE, fig.hold='hold', out.width="30%"}
+# DESeq2
+# change 'progress' to 'clinical data'
+colData_annot <- read_tsv('~/Documents/GRNs/BITC/data/sampleData.txt')
+colData_annot$clinical_state[is.na(colData_annot$clinical_state)] <- 'unknown'
+colData_annot$methylation_subtype[is.na(colData_annot$methylation_subtype)] <- 'unknown'
+colData_annot$transcriptional_type[is.na(colData_annot$transcriptional_type)] <- 'unknown'
+
+# run DESeq2
+dds = DESeqDataSetFromMatrix(countData=dat, colData = colData_annot, design = ~clinical_state+type)
+# remove N_multimapping, N_noFeature, N_ambiguous
+remove <- c('N_multimapping', 'N_noFeature', 'N_ambiguous')
+dds <- dds[!rownames(dds) %in% remove]
+
+#idx <- rowSums(counts(dds, normalized=FALSE) >=10) 
+#dds <- dds[idx, ]
+#dds <- na.omit(dds)
+dds = DESeq(dds)
+resultsNames(dds)
+# [1] "Intercept"                  "type_Tumor_vs_CellLine"    
+# [3] "type_Xenograft_vs_CellLine"
+res_xenograft_cell_line=results(dds, name="type_Xenograft_vs_CellLine", alpha=0.01)
+summary(res_xenograft_cell_line)
+sum(res_xenograft_cell_line$padj < 0.01, na.rm=TRUE)
+
+res_tumor_cell_line=results(dds, name="type_Tumor_vs_CellLine", alpha=0.01)
+summary(res_tumor_cell_line)
+sum(res_tumor_cell_line$padj < 0.01, na.rm=TRUE)
+
+# use vst-normalised counts 
+vsd <- varianceStabilizingTransformation(dds, blind=FALSE)
+vsd_dds <- vsd
+# rld <- rlog(dds, blind=FALSE)
+rv <- rowVars(assay(vsd))
+#ntop = 1000
+ntop <- length (rv[rv>=quantile(rv, 0.90)])
+select <- order(rv, decreasing=TRUE)[seq_len(min(ntop, length(rv)))]
+topVarGenes_vst <- assay(vsd)[select, ]
+
+# TO DO
+# remove N_multimapping, N_noFeature, N_ambiguous rows !
+
+# prepare annotation for heatmap
+annotation_genes <- data.frame(colData_annot) %>%
+  column_to_rownames(var = 'IDs')
+annotation_genes <- annotation_genes %>%
+  dplyr::select ('clinical_state', 'type', 'methylation_subtype', 'transcriptional_type')
+
+# heatmap
+pdf ('~/Documents/GRNs/BITC/plots/Genes_heatmap.pdf', width = 16, height = 8)
+pheatmap::pheatmap(topVarGenes_vst, fontsize_row=5, color=colorRampPalette(c("blue","white","red"))(100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = annotation_genes, clustering_method = "ward.D2", fontsize_col = 9, show_rownames = FALSE, scale = 'row')
+dev.off()
+
+# pca
+pdf('~/Documents/GRNs/BITC/plots/Genes_pcas.pdf', width = 4, height = 3)
+dat_pca_genes <- t(topVarGenes_vst) 
+dat_pca_genes <- rownames_to_column(data.frame(dat_pca_genes), var = 'sample_ID')
+dat_pca_genes$type <- annotation_genes$type
+dat_pca_genes$clinical_state <- annotation_genes$clinical_state
+dat_pca_genes$methylation_subtype <- annotation_genes$methylation_subtype
+dat_pca_genes$transcriptional_type <- annotation_genes$transcriptional_type
+autoplot(prcomp(dat_pca_genes[, 2:5884]), data = dat_pca_genes, colour='clinical_state')
+autoplot(prcomp(dat_pca_genes[, 2:5884]), data = dat_pca_genes, colour='type')
+autoplot(prcomp(dat_pca_genes[, 2:5884]), data = dat_pca_genes, colour='methylation_subtype')
+autoplot(prcomp(dat_pca_genes[, 2:5884]), data = dat_pca_genes, colour='transcriptional_type')
+dev.off()
+```
+
+```{r}
+# NMF for top variable genes
+dat <- NULL; 
+dat <- topVarGenes_vst
+dat_nneg <- nneg(dat, method='min')
+#dat_nneg <- scale(dat_nneg, scale=TRUE, center=TRUE)
+
+seed = 123456; 
+estim.r <- nmf (dat_nneg, 2:4, nrun = 10, seed = seed)
+
+pdf ('~/Documents/GRNs/BITC/plots/Genes_nmf_single_method_over_range_of_ranks.pdf', width = 20, height = 18)
+plot(estim.r)
+consensusmap (estim.r, annCol = annotation_genes)
+
+# intNMF
+# another means for deciding the optimal number of clusters
+# https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0176278
+#optK <- nmf.opt.k(dat_nneg, n.runs=30, n.fold=5, k.range=2:8, result=TRUE)
+dev.off()
+```
+
+```{r}
+# SCENIC
+scenic_in <- assay(vsd_dds)
+scenic_in <- scenic_in[rownames(scenic_in)%in% rownames(topVarGenes_vst), ]
+
+#scenic_in <- scenic_in[rownames(scenic_in) %in% rownames(res_05), ]
+saveRDS(scenic_in, file = "~/Documents/GRNs/BITC/scenic_in.Rds")
+# set scenicoptions
+dir.create("~/Documents/GRNs/BITC//int")
+org <- "hgnc" # or mgi, or dmel
+dbDir <- "~/Documents/GRNs/BITC/cisTarget_databases"
+myDatasetTitle <- "SCENIC on bulk RNAseq BITC" # choose a name for your analysis
+data(defaultDbNames)
+dbs <- defaultDbNames[[org]]
+scenicOptions <- initializeScenic(org=org, dbDir=dbDir, dbs=dbs, datasetTitle=myDatasetTitle, nCores=1)
+
+cellInfo <- colData
+saveRDS(cellInfo, file="~/Documents/GRNs/BITC/int/cellInfo.Rds")
+saveRDS(scenicOptions, file ="~/Documents/GRNs/BITC/int/scenicOptions.Rds")
+
+scenicOptions@inputDatasetInfo$cellInfo <- "~/Documents/GRNs/BITC/int/cellInfo.Rds"
+saveRDS(scenicOptions, file ="~/Documents/GRNs/BITC/int/scenicOptions.Rds")
+
+# convert scenic_in rownames (ENSEMBL IDs) to SYMBOLS
+geneSymbols <-  rownames(scenic_in)
+geneIDs <- ensembldb::select(EnsDb.Hsapiens.v79, keys= geneSymbols, keytype = "GENEID", columns = c("SYMBOL","GENEID"))
+genes <- geneIDs[!duplicated(geneIDs$SYMBOL), ]
+
+# replace rownames in scenic_in with gene symbols
+scenic_in <- scenic_in[genes$GENEID, ]
+rownames(scenic_in) <- genes$SYMBOL
+
+# ### Co-expression network
+#genesKept <- geneFiltering(exprMat, scenicOptions)
+#exprMat_filtered <- exprMat[genesKept, ]
+exprMat_filtered <- scenic_in
+exprMat <- scenic_in
+runCorrelation(exprMat_filtered, scenicOptions)
+exprMat_filtered_log <- log2(exprMat_filtered+1)
+runGenie3(exprMat_filtered_log, scenicOptions)
+
+### Build and score the GRN
+exprMat_log <- log2(exprMat+1)
+logMat <- log2(exprMat+1)
+scenicOptions <- readRDS("~/Documents/GRNs/BITC/int/scenicOptions.Rds")
+scenicOptions@settings$verbose <- TRUE
+scenicOptions@settings$nCores <- 1
+scenicOptions@settings$seed <- 123
+scenicOptions@inputDatasetInfo$cellInfo <- "~/Documents/GRNs/BITC/int/cellInfo.Rds"
+
+# For toy run
+#scenicOptions@settings$dbs <- scenicOptions@settings$dbs["10kb"]
+runSCENIC_1_coexNetwork2modules(scenicOptions)
+#runSCENIC_2_createRegulons(scenicOptions, coexMethod=c("top5perTarget")) #** Only for toy run!!
+runSCENIC_2_createRegulons(scenicOptions)
+runSCENIC_3_scoreCells(scenicOptions, logMat)
+```
+
+
+```{r}
+# import scenic ouput (auc activity scores and regulon-gene sets)
+auc_BITC = readRDS('~/Documents/GRNs/BITC/int/3.4_regulonAUC.Rds')
+regulons_BITC = readRDS('~/Documents/GRNs/BITC/int/2.6_regulons_asGeneSet.Rds')
+```
+
+
+```{r}
+# check expression of regulons across cell lines, tumor and xenografts
+# heatmap
+dat = data.frame(auc_BITC@assays@data@listData)
+colnames(dat) <- gsub (pattern = 'AUC.', replacement = "", colnames(dat))
+colnames(dat) <- gsub (pattern = '\\.', replacement = "-", colnames(dat))
+dat = na.omit(t(scale(t(as.matrix(dat)), center = T, scale=T)))
+# generate plots using the extended regulons
+dat <- dat[grep (rownames(dat), pattern = '_extended'), ]
+
+pdf ('~/Documents/GRNs/BITC/plots/regulons_heatmap.pdf', width = 15, height = 10)
+pheatmap::pheatmap(dat, fontsize_row=4, color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = annotation_genes, clustering_method = "ward.D2", fontsize_col = 6)
+dev.off()
+
+# pca
+pdf('~/Documents/GRNs/BITC/plots/regulons_pcas.pdf', width = 4, height = 3)
+dat_pca_genes <- t(dat) 
+dat_pca_genes <- rownames_to_column(data.frame(dat_pca_genes), var = 'sample_ID')
+dat_pca_genes$type <- annotation_genes$type
+dat_pca_genes$clinical_state <- annotation_genes$clinical_state
+dat_pca_genes$transcriptional_type <- annotation_genes$transcriptional_type
+dat_pca_genes$methylation_subtype <- annotation_genes$methylation_subtype
+autoplot(prcomp(dat_pca_genes[, 2:140]), data = dat_pca_genes, colour='clinical_state')
+autoplot(prcomp(dat_pca_genes[, 2:140]), data = dat_pca_genes, colour='type')
+autoplot(prcomp(dat_pca_genes[, 2:140]), data = dat_pca_genes, colour='transcriptional_type')
+autoplot(prcomp(dat_pca_genes[, 2:140]), data = dat_pca_genes, colour='methylation_subtype')
+dev.off()
+```
+
+
+```{r}
+# NMF and consensus clustering to determine the number of groups among TFRI samples independent of being tumor, xenograft or cell line
+# estimate number of ranks
+seed = 123456; 
+# run at multiple ranks and choose the one at which the cophenetic value starts to decrease
+# Estimation of the rank: Consensus matrices computed from 10 runs for each value of r
+# convert data to non-negative matirx
+dat_nneg <- nneg(dat, method='min')
+estim.r <- nmf (dat_nneg, 2:4, nrun = 10, seed = seed)
+
+pdf ('~/Documents/GRNs/BITC/plots/RegulonActivity_nmf_single_method_over_range_of_ranks.pdf', width = 20, height = 18)
+plot(estim.r)
+consensusmap (estim.r, annCol = annotation_genes)
+dev.off()
+
+# single ranke over range of methods
+estim.r <- nmf (dat_nneg, 8, list ('lee', 'brunet', 'nsNMF'), nrun = 10, seed = 123456)
+pdf ('~/Documents/GRNs/BITC/plots/RegulonActivity_nmf_single_ranke_over_range_of_methods.pdf', width = 15, height = 16)
+consensusmap (estim.r, annCol = annotation_genes)
+dev.off()
+
+# randomize the data and recompute the rank
+# shuffle the original data
+V.random <- randomize (regulonActivity_byTimePoint)
+# estimate quality measures from the shuffled data using default nmf algorithm
+estim.r.random <- nmf (V.random, 2:10, nrun = 10, seed = 123456)
+# plot measures on the same graph
+pdf ('~/Documents/GRNs/BITC/plots/RegulonActivity_nmf_single_method_over_range_of_ranks_randomized.pdf', width= 20, height = 18)
+plot (estim.r, estim.r.random)
+dev.off()
+
+# intNMF
+# another means for deciding the optimal number of clusters
+# https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0176278
+#optK <- nmf.opt.k(dat_nneg, n.runs=30, n.fold=5, k.range=2:8, result=TRUE)
+```
+
+```{r}
+# DEXSeq
+# read data
+#filenames=list.files(path = '~/Documents/GRNs/BITC/data/exon_counts/', pattern="*")
+#countFiles = filenames
+#countFiles = countFiles[-116]
+
+# sampleTable
+# sampleTable = read_tsv('bam2ptID2metadata.txt')
+#sampleTable <- read_tsv('~/Documents/GRNs/BITC/data/sampleData.txt')
+#colnames(sampleTable)[4] = c('condition')
+#sampleTable <- sampleTable %>%
+# column_to_rownames(var='sample_ID')
+#sampleTable <- sampleTable[rownames(sampleTable) %in% countFiles, ]
+#sampleTable$clinical_state[is.na(sampleTable$progress)] <- 'unknown'
+
+# flattenedFile 
+#flattenedFile = 'GRCh38_rel96_spiked_DEXSeq_chr.gff'
+
+# design
+formulaReducedModel <- ~ sample + exon 
+formulaFullModel <- ~ sample + exon + condition:exon
+
+# create DEXSeqDataSet object
+setwd('~/Documents/GRNs/BITC/data/exon_counts/')
+#dxd <- DEXSeqDataSetFromHTSeq(countFiles,  sampleData=sampleTable, design= formulaReducedModel, flattenedfile = flattenedFile )
+
+# remove rows with low expressed exonic regions/isoforms
+#idx <- rowSums(counts(dxd, normalized=FALSE) >=10) >= 50
+#dxd <- dxd[idx, ]
+# remove rows 
+# _ambiguous      121082
+# _ambiguous_readpair_position    0
+# _empty  44256508
+# _lowaqual       0
+# _notaligned     0
+
+
+# normalisation
+#dxd <- estimateSizeFactors(dxd)
+# dxd <- estimateDispersions(dxd, formula=formulaFullModel)
+#dxd <- estimateDispersionsAlt(dxd, verbose=TRUE)
+#saveRDS(dxd, file = '~/Documents/GRNs/BITC/output/dxd_BTIC_DEXSeqAlt.Rds')
+#pdf ('~/Documents/GRNs/BITC/plots/DEXSeq_BTIC_DEXSeqAlt.pdf')
+#plotDispEsts(dxd)
+
+# testing for differential exon usage
+#dxd <- testForDEUAlt(dxd, reducedModel=formulaReducedModel, fullModel=formulaFullModel)
+#dxd <- estimateExonFoldChanges(dxd, fitExpToVar = "condition")
+#dxr1 <- DEXSeqResultsAlt(dxd)
+
+# I ran DEXSeqAlt on arc 02_DEXSeqAlt.R
+setwd('~/Documents/GRNs/BITC/data')
+dxd <- readRDS('~/Documents/GRNs/BITC/data/archive/dxd_BTIC_DEXSeqAlt.Rds')
+#dxd <- readRDS('~/Documents/GRNs/BITC/data/dxdtestForDEUAlt.Rds')
+dxr1 <- readRDS('~/Documents/GRNs/BITC/data/archive/dxr1_BTIC_DEXSeqAlt.Rds')
+#dxd <- estimateExonFoldChanges(dxd, fitExpToVar = "condition")
+#dxr1 <- DEXSeqResultsAlt(dxd)
+
+# how many exonic regions are signficant with false discovery rate < 10%
+table(dxr1$padj < 0.1)
+# how many genes are affected
+table(tapply(dxr1$padj < 0.1, dxr1$groupID, any))
+# MA plot
+# plotMA(dxr1, cex = 0.8)
+
+# normalisation and pick up top variable 10% exons
+#vsd <- varianceStabilizingTransformation(featureCounts(dxd))
+vsd_dxd <- varianceStabilizingTransformation(dxd)
+# rld <- rlog(dds, blind=FALSE)
+rv <- rowVars(assay(vsd_dxd))
+#ntop = 1000
+ntop <- length (rv[rv>=quantile(rv, 0.95)])
+select <- order(rv, decreasing=TRUE)[seq_len(min(ntop, length(rv)))]
+topVarExons_vst <- assay(vsd_dxd)[select, ]; topVarExons_vst <- topVarExons_vst[, 1:115]
+colnames(topVarExons_vst) <- colData(dxd)$IDs[1:115]
+
+# prepare annotation for heatmap
+annotation_exons <- data.frame(colData_annot) %>%
+  column_to_rownames(var = 'IDs') %>%
+  dplyr::select ('clinical_state', 'type', 'methylation_subtype', 'transcriptional_type')
+annotation_exons <- annotation_exons[colnames(topVarExons_vst), ]
+
+# heatmap
+pdf ('~/Documents/GRNs/BITC/plots/exons_heatmap.pdf', width = 16, height = 8)
+topVarExons_vst <- scale (topVarExons_vst, scale = TRUE, center = TRUE)
+pheatmap::pheatmap(topVarExons_vst, fontsize_row=5, color=colorRampPalette(c("blue","white","red"))(100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = annotation_exons, clustering_method = "ward.D2", fontsize_col = 9, show_rownames = FALSE, scale = 'row')
+dev.off()
+
+# pca
+pdf('~/Documents/GRNs/BITC/plots/exons_pcas.pdf', width = 4, height = 3)
+dat_pca_genes <- t(topVarExons_vst) 
+dat_pca_genes <- rownames_to_column(data.frame(dat_pca_genes), var = 'sample_ID')
+dat_pca_genes$type <- annotation_exons$type
+dat_pca_genes$clinical_state <- annotation_exons$clinical_state
+dat_pca_genes$methylation_subtype <- annotation_exons$methylation_subtype
+dat_pca_genes$transcriptional_type <- annotation_exons$transcriptional_type
+autoplot(prcomp(dat_pca_genes[, 2:25691]), data = dat_pca_genes, colour='clinical_state')
+autoplot(prcomp(dat_pca_genes[, 2:25691]), data = dat_pca_genes, colour='type')
+autoplot(prcomp(dat_pca_genes[, 2:25691]), data = dat_pca_genes, colour='methylation_subtype')
+autoplot(prcomp(dat_pca_genes[, 2:25691]), data = dat_pca_genes, colour='transcriptional_type')
+dev.off()
+```
+
+```{r}
+# NMF based on exons
+seed = 123456; 
+# run at multiple ranks and choose the one at which the cophenetic value starts to decrease
+# Estimation of the rank: Consensus matrices computed from 10 runs for each value of r
+# convert data to non-negative matirx
+dat_nneg <- nneg(topVarExons_vst, method='min')
+estim.r <- nmf (dat_nneg, 2:4, nrun = 10, seed = seed)
+
+pdf ('~/Documents/GRNs/BITC/plots/exons_nmf_single_method_over_range_of_ranks.pdf', width = 20, height = 18)
+plot(estim.r)
+consensusmap (estim.r, annCol = annotation_exons)
+dev.off()
+
+# single ranke over range of methods
+estim.r <- nmf (dat_nneg, 8, list ('lee', 'brunet', 'nsNMF'), nrun = 10, seed = 123456)
+pdf ('~/Documents/GRNs/BITC/plots/exons_nmf_single_ranke_over_range_of_methods.pdf', width = 15, height = 16)
+consensusmap (estim.r, annCol = annotation)
+dev.off()
+
+# randomize the data and recompute the rank
+# shuffle the original data
+V.random <- randomize (regulonActivity_byTimePoint)
+# estimate quality measures from the shuffled data using default nmf algorithm
+estim.r.random <- nmf (V.random, 2:10, nrun = 10, seed = 123456)
+# plot measures on the same graph
+pdf ('~/Documents/GRNs/BITC/plots/exons_nmf_single_method_over_range_of_ranks_randomized.pdf', width= 20, height = 18)
+plot (estim.r, estim.r.random)
+dev.off()
+
+# intNMF
+# another means for deciding the optimal number of clusters
+# https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0176278
+#optK <- nmf.opt.k(dat_nneg, n.runs=30, n.fold=5, k.range=2:8, result=TRUE)
+```
+
+### TODO FOR BITC project data: SCENIC 
+## generate network based on exons vs on genes and see how this differs
+
+```{r}
+# remove the word extended and them remove duplicated 
+rnaseq_deg_dat = dat
+rnaseq_deg_dat <- data.frame(rnaseq_deg_dat) 
+rnaseq_deg_dat <- rownames_to_column(rnaseq_deg_dat) 
+rnaseq_deg_dat$rowname <- gsub ("_extended",  "", rnaseq_deg_dat$rowname)
+rnaseq_deg_dat <- rnaseq_deg_dat[!duplicated (rnaseq_deg_dat$rowname), ]; rownames(rnaseq_deg_dat) = NULL; 
+rnaseq_deg_dat <- column_to_rownames(rnaseq_deg_dat, var = 'rowname')
+pdf ('~/Documents/GRNs/data/tumor_data/rnaseq_data/int_bulk_samples_deg/Step3_RegulonActivity_heatmap_regulonAUC_mod_labels.pdf', height = 9, width = 5)
+pheatmap::pheatmap(rnaseq_deg_dat, fontsize_row=5, color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = colData, clustering_method = "ward.D2", fontsize_col = 6)
+dev.off()
+```
+
+```{r}
+# explore cluster assignment across exons, genes and regulons
+exon_clusters <- read_tsv('~/Documents/GRNs/BITC/output/exon_clusters_nmf')
+colnames(exon_clusters)[2:5] <- paste('exon', colnames(exon_clusters)[2:5], sep = '_')
+
+gene_clusters <- read_tsv('~/Documents/GRNs/BITC/output/gene_clusters_nmf')
+colnames(gene_clusters)[2:5] <- paste('gene', colnames(exon_clusters)[2:5], sep = '_')
+
+regulon_clusters <- read_tsv('~/Documents/GRNs/BITC/output/regulon_clusters_nmf')
+colnames(regulon_clusters)[2:5] <- paste('regulon', colnames(exon_clusters)[2:5], sep = '_')
+
+# merge all thress into one df
+dat <- inner_join(exon_clusters, gene_clusters, by = 'patient_ID')
+dat <- inner_join(dat, regulon_clusters, by = 'patient_ID')
+
+# merge cluster assignment with metadata
+dat$patient_ID <- gsub(pattern = '−', replacement ='-', dat$patient_ID)
+dat_annot <- inner_join(dat, metadata, by = 'patient_ID')
+
+write.table (dat_annot, file = '~/Documents/GRNs/BITC/output/exon_gene_regulon_cluster_annotations.txt', sep = '\t', quote = FALSE)
+```
+
+```{r}
+# ven diagram for common genes, regulons and exons
+# genes
+genes <- unique(rownames(topVarGenes_vst))
+length (genes)
+
+# exons
+exons_IDs <- rownames(topVarExons_vst)
+exons <- unique(sapply(strsplit(exons_IDs, split = ":", fixed = TRUE), function(x)x[1]))
+exons <- unique(sapply(strsplit(exons, split = "+", fixed = TRUE), function(x)x[1]))
+length (exons)
+
+# regulons
+regulons = unique(unlist(regulons_BITC))
+regulons <- ensembldb::select(EnsDb.Hsapiens.v79, keys= regulons, keytype = "SYMBOL", columns = c("SYMBOL","GENEID"))
+regulons <- unique(regulons$GENEID)
+
+# venn diagram
+x <- list (exons=exons, regulons=regulons, genes=genes)
+ggVennDiagram(x)
+```
+
+```{r}
+# plot several versions of the heatmap with differentially expressed genes vs differentially used exons
+# exons
+mcols(dxr1)$description 
+res_exons <- data.frame(dxr1)
+res_exons <- na.omit(res_exons) %>%
+  dplyr::filter(padj < 0.1)
+# check number of signficantly used exons
+length (unique(res_exons$featureID))
+# how many genes do the exons correspond to
+length (unique(res_exons$groupID))
+
+# genes
+# resultsNames(dds)
+#res_genes=results(dds, name="type_Tumor_vs_CellLine")
+res_genes <- data.frame(results(dds))
+res_genes <- subset(res_genes, padj < 0.01)
+
+dxr1[grep (pattern='ENSG00000129219', rownames(dxr1)), ]
+
+pdf ('~/Documents/GRNs/BITC/plots/ENSG00000129219.pdf', width = 14, height = 6)
+plotDEXSeq(dxr1, "ENSG00000129219", legend=TRUE, cex.axis=1.2, cex=1.3, lwd=2, fitExpToVar = "progress")
+
+# remove effect of overall gene expression
+plotDEXSeq(dxr1, "ENSG00000129219", expression=FALSE, splicing=TRUE, legend=TRUE, cex.axis=1.2, cex=1.3, lwd=2, fitExpToVar = "progress")
+
+# exons/normalised counts
+plotDEXSeq(dxr1, "ENSG00000129219", expression=FALSE, norCounts=TRUE, legend=TRUE, cex.axis=1.2, cex=1.3, lwd=2, fitExpToVar = "progress")
+dev.off()
+```
+
+
+####
+I discarded sample lableled as 'PT-PV2594' because it was not clear which sample this is (patient ID maps to multiple samples). 
+I have also re-lablelled PT-DF5919, PT-DM9089, PT-DS9789 to the corresponding sample ID. 
+
+
+incidence where tumor and cell line clustered together, Rs: PT−AR5365 
+incidence where tumor and cell line clustered together, Ns: PT−CA2271, PT−DF5919, PT−EV3071, PT−JB1730, PT−KM5291, PT−RD1291
+incidence where tumor, cell line and xenograft clustered together, Rs: PT−CM1209
+incidence where xenograft and cell line clustered together, Rs: PT−DS9789
+incidence where xenograft and cell line clustered together, Ns:PT−HO0394
+incidence where tumor and xenograft cluster together, Ns: PT−JE6375, PT−LC3356

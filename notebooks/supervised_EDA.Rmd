@@ -1,0 +1,329 @@
+---
+title: "pedGBM"
+author: "Alyaa_Mohamed"
+date: "29/04/2020"
+output: html_document
+---
+```{r, include = FALSE, results = FALSE, results = 'hide'}
+library (magrittr)
+library(ggVennDiagram)
+library (tidyverse)
+library (tibble)
+library (rnaseqWrapper)
+library (pheatmap)
+library (vsn)
+library (DESeq2)
+library(RColorBrewer)
+library (ggfortify)
+library(EnsDb.Hsapiens.v79)
+library (SCENIC)
+library (DEXSeq)
+library (tidyverse)
+library (dplyr)
+library (BiocParallel)
+library (NMF)
+library (IntNMF)
+```
+
+```{r genes, include=FALSE, results=FALSE}
+# read counts data
+setwd('~/Documents/GRNs/pedGBM/gene_counts')
+
+#countFiles = list.files(path='data/', pattern = '*-ReadsPerGene.out.tab')
+directory = '~/Documents/GRNs/pedGBM/gene_counts'
+dat_gene_counts <- mergeCountFiles(fileDir = directory, fileID = "*ReadsPerGene.out.tab", fileSep = "\t", seqIDcol = 1, colsToKeep = 1:2)
+
+dat_gene_counts <- dat_gene_counts %>%
+  dplyr::select('SM2932_P1_P_R1.2', 'SM2937_P1_R1_R1.2', 'SM3013_P2_P_R1.2', 'SM3042_P2_R1_R1.2', 'SM4018_P5_P_R1.2', 'SM4021_P3_R1_R1.2', 'SM4025_P5_R1_R1.2', 'SM4058_P5_R2_R1.2', 'SM4063_P5_R3_R1.2')
+# remove N_multimapping, N_noFeature, N_ambiguous
+remove <- c('N_multimapping', 'N_noFeature', 'N_ambiguous')
+dat_gene_counts <- dat_gene_counts[!rownames(dat_gene_counts) %in% remove, ]
+colnames(dat_gene_counts) <- gsub(pattern = '_R1.2', replacement = ' ', colnames(dat_gene_counts))
+
+# metadata
+sampleTable_genes <- data.frame (rownames= colnames(dat_gene_counts), patient = c(rep ('P1', 2), rep ('P2', 2), rep ('P5', 1), rep ('P3', 1), rep ('P5', 3)), clinical_status = c('P', 'R1', 'P', 'R1', 'P', 'R1', 'R1', 'R2', 'R3'))
+
+# run DESeq2
+dds = DESeqDataSetFromMatrix(countData=dat_gene_counts, colData = sampleTable_genes, design = ~ patient+clinical_status)
+keep = rowSums(counts(dds)) >=10
+dds <- dds[keep, ]
+dds = DESeq(dds)
+
+## prepare annotation
+annotation_genes <- sampleTable_genes %>%
+  column_to_rownames(var='rownames')
+
+# use vst-normalised counts 
+vsd <- varianceStabilizingTransformation(dds, blind=FALSE)
+# rld <- rlog(dds, blind=FALSE)
+#rv <- rowVars(assay(vsd))
+#ntop = length (rv[rv >= quantile(rv, 0.90)])
+#select <- order(rv, decreasing=TRUE)[seq_len(min(ntop, length(rv)))]
+#topVarGenes_vst <- assay(vsd)[select, ]
+
+# differentially expressed genes between P, R1 and R2
+resultsNames(dds)
+res_R1_P <- results(dds, contrast=c("clinical_status","R1","P")); res_R1_P <- subset (res_R1_P, padj < 0.01)
+
+#res_R2_P <- results(dds, contrast=c("clinical_status","R2","P")); res_R2_P <- subset (res_R2_P, padj < 0.01)
+#res_R3_P <- results(dds, contrast=c("clinical_status","R3","P")); res_R3_P <- subset (res_R3_P, padj < 0.01)
+#select <- union (rownames(res_R1_P), rownames(res_R2_P)); select <- intersect (rownames(res_R3_P), select)
+
+select <- rownames(res_R1_P) # R2 and R3 do not have replicate
+DEG_vst <- assay(vsd)[select, ]
+
+# heatmap
+pdf ('~/Documents/GRNs/pedGBM/plots/supervised_Genes_heatmap.pdf', width = 4, height = 4)
+pheatmap::pheatmap(DEG_vst, fontsize_row=5, color=colorRampPalette(c("blue","white","red"))(100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = annotation_genes, clustering_method = "ward.D2", fontsize_col = 9, show_rownames = FALSE, scale = 'row')
+dev.off()
+
+# pca
+pdf('~/Documents/GRNs/pedGBM/plots/supervised_Genes_pcas.pdf', width = 4, height = 3)
+dat_pca_genes <- t(DEG_vst) 
+dat_pca_genes <- rownames_to_column(data.frame(dat_pca_genes), var = 'sample_ID')
+dat_pca_genes$patient <- c(rep ('P1', 2), rep ('P2', 2), rep ('P5', 1), rep ('P3', 1), rep ('P5', 3))
+dat_pca_genes$clinical_status <- c('P', 'R1', 'P', 'R1', 'P', 'R1', 'R1', 'R2', 'R3')
+autoplot(prcomp(dat_pca_genes[, 2:100]), data = dat_pca_genes, colour='clinical_status')
+autoplot(prcomp(dat_pca_genes[, 2:100]), data = dat_pca_genes, colour='patient')
+dev.off()
+```
+
+```{r}
+# proteomics
+# read data
+dat_proteins <- read_csv('../proteomics/Proteins intra=proteomic_ruler_inter=IRS_ref=PooledInternalStandard_edited.csv')
+
+remove <- c('Accession', 'Description', 'MW [kDa]', 'CellLines', 'CellLines_1', 'CellLines_2', 'CellLines_3', 'PooledInternalStandard', 'PooledInternalStandard_1', 'PooledInternalStandard_2', 'Normal', 'Normal_1', 'Normal_2')
+dat_proteins <- dat_proteins[, !colnames(dat_proteins) %in% remove] 
+
+  
+# summarise duplicate genes by mean
+dat_proteins <- dat_proteins %>%
+  group_by(Gene) %>%
+  summarise_all(mean) %>%
+  column_to_rownames(var = 'Gene')
+
+# select the top variable proteins
+rv <- rowVars(as.matrix(dat_proteins))
+ntop = length (rv[rv >= quantile(rv, 0.75)])
+select <- order(rv, decreasing=TRUE)[seq_len(min(ntop, length(rv)))]
+topVarProteins_vst <- dat_proteins[select, ]
+
+# annotation for visuals
+annotation_proteins <- data.frame(colnames(dat_proteins))
+annotation_proteins$patient = c(rep ('P1',2), rep ('P2', 2), rep ('P3', 2), rep ('P5', 2),rep ('P1',2), rep ('P2', 2), rep ('P3', 2), rep ('P5', 10))
+annotation_proteins$clinical_status = c('P', 'R1', 'P', 'R1', 'R1', 'R1', 'P', 'R1', 'P', 'R1', 'P', 'R1', 'R1', 'R1', 'R2', 'R3', 'P', 'R1', 'R2', 'R3', 'P', 'R1', 'R2', 'R3')
+#annotation_proteins <- annotation_proteins %>%
+  column_to_rownames(var = 'colnames.dat_proteins.')
+
+# heatmap
+pdf ('~/Documents/GRNs/pedGBM/plots/Proteins_heatmap.pdf', width = 5, height = 4)
+dat_proteins <- na.omit(dat_proteins)
+colnames(dat_proteins) = c("SM2932_P1_P", "SM2937_P1_R1", "SM3013_P2_P", "SM3042_P2_R1", "SM4021_P3_R1", "SM4021_P3_R1", "SM4018_P5_P", "SM4025_P5_R1", "SM2932_P1_P", "SM2937_P1_R1", "SM3013_P2_P", "SM3042_P2_R1", "SM4021_P3_R1", "SM4021_P3_R1", "SM4058_P5_R2", "SM4063_P5_R3", "SM4018_P5_P", "SM4025_P5_R1", "SM4058_P5_R2", "SM4063_P5_R3", "SM4018_P5_P", "SM4025_P5_R1", "SM4058_P5_R2", "SM4063_P5_R3")
+pheatmap::pheatmap(dat_proteins, fontsize_row=5, color=colorRampPalette(c("blue","white","red"))(100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = annotation_genes, clustering_method = "ward.D2", fontsize_col = 9, show_rownames = FALSE, scale = 'row')
+dev.off()
+
+# pca
+pdf('~/Documents/GRNs/pedGBM/plots/Proteins_pcas.pdf', width = 4, height = 3)
+dat_pca_proteins <- t(topVarProteins_vst) 
+dat_pca_proteins <- rownames_to_column(data.frame(dat_pca_proteins), var = 'sample_ID')
+dat_pca_proteins$patient <- c(rep ('P1',2), rep ('P2', 2), rep ('P3', 2), rep ('P5', 2),rep ('P1',2), rep ('P2', 2), rep ('P3', 2), rep ('P5', 10))
+dat_pca_proteins$clinical_status <- c('P', 'R1', 'P', 'R1', 'R1', 'R1', 'P', 'R1', 'P', 'R1', 'P', 'R1', 'R1', 'R1', 'R2', 'R3', 'P', 'R1', 'R2', 'R3', 'P', 'R1', 'R2', 'R3')
+autoplot(prcomp(dat_pca_proteins[, 2:1124]), data = dat_pca_proteins, colour='clinical_status')
+autoplot(prcomp(dat_pca_proteins[, 2:1124]), data = dat_pca_proteins, colour='patient')
+dev.off()
+```
+
+```{r}
+# exons/DEXSeq
+dxd <- readRDS ('~/Documents/GRNs/pedGBM/output/dxd_pedGBM_DEXSeqAlt.Rds')
+dxd <- readRDS ('~/Documents/GRNs/pedGBM/output/dxdtestForDEUAlt.Rds')
+dxr1 <- readRDS ('~/Documents/GRNs/pedGBM/output/dxr1_pedGBM_DEXSeqAlt.Rds')
+dxr1_tab <- readRDS('~/Documents/GRNs/pedGBM/output/dxr1_tab_pedGBM_DEXSeqAlt.Rds')
+# how many exonic regions are signficant with false discovery rate < 10%
+table(dxr1$padj < 0.1)
+# how many genes are affected
+table(tapply(dxr1$padj < 0.1, dxr1$groupID, any))
+
+# prepare annotation
+annotation_exons <- data.frame(colData(dxd)) 
+annotation_exons <- annotation_exons[annotation_exons$exon == 'this', ]
+rownames(annotation_exons) = NULL
+annotation_exons <- column_to_rownames(annotation_exons, var = 'rownames') %>%
+  dplyr::select(-'sizeFactor', -'exon', -'sample')
+colnames(annotation_exons) = c('patient', 'clinical_status')
+
+# used variance stabilized transformed data
+vsd_exons <- varianceStabilizingTransformation(dxd)
+# select the top 1000 variable genes
+rv <- rowVars(as.matrix(assay(vsd_exons)))
+ntop = length (rv[rv >= quantile(rv, 0.90)])
+select <- order(rv, decreasing=TRUE)[seq_len(min(ntop, length(rv)))]
+topVarExons_vst <- assay(vsd_exons)[select, ]; topVarExons_vst <- topVarExons_vst[,1:9]
+colnames(topVarExons_vst) <- colData(dxd)$rownames[1:9]
+
+# heatmap
+pdf ('~/Documents/GRNs/pedGBM/plots/exons_heatmap.pdf', width = 4, height = 4)
+# summarise exons by gene and take the mean
+topVarExons_vst <- data.frame (topVarExons_vst)
+topVarExons_vst <- topVarExons_vst %>%
+  rownames_to_column(var= 'exon_ID') 
+topVarExons_vst$exon_ID <- sapply(strsplit(topVarExons_vst$exon_ID, ":"), function(x) paste(x[1]))
+topVarExons_vst$exon_ID <- sapply(strsplit(topVarExons_vst$exon_ID, "\\."), function(x) paste(x[1]))
+
+topVarExons_vst <- topVarExons_vst %>%
+  group_by(exon_ID) %>%
+  summarise_all(mean) %>%
+  column_to_rownames(var = 'exon_ID')
+
+#topVarExons_vst <- scale (topVarExons_vst, scale = TRUE, center = TRUE)
+rows_zero_var <- which (apply(topVarExons_vst, 1, var) == 0)
+df <- topVarExons_vst[!rownames(topVarExons_vst) %in% names(rows_zero_var), ]
+
+pheatmap::pheatmap(df, fontsize_row=2, color=colorRampPalette(c("blue","white","red"))(100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = annotation_exons, clustering_method = "ward.D2", fontsize_col = 9, show_rownames = FALSE, scale= 'row')
+dev.off()
+
+# pca
+pdf('~/Documents/GRNs/pedGBM/plots/exons_pcas.pdf', width = 4, height = 3)
+dat_pca_exons <- t(topVarExons_vst) 
+dat_pca_exons <- rownames_to_column(data.frame(dat_pca_exons), var = 'sample_ID')
+dat_pca_exons$patient <- c('P1', 'P1', 'P2', 'P2', 'P5', 'P3', 'P5', 'P5', 'P5')
+dat_pca_exons$clinical_status <- c('P', 'R1', 'P', 'R1', 'P', 'R1', 'R1', 'R2', 'R3')
+autoplot(prcomp(dat_pca_exons[, 2:3937]), data = dat_pca_exons, colour='clinical_status')
+autoplot(prcomp(dat_pca_exons[, 2:3937]), data = dat_pca_exons, colour='patient')
+dev.off()
+```
+
+```{r}
+# scenic regulons
+scenic_in <- topVarGenes_vst
+
+#scenic_in <- scenic_in[rownames(scenic_in) %in% rownames(res_05), ]
+saveRDS(scenic_in, file = "~/Documents/GRNs/pedGBM/scenic_in.Rds")
+# set scenicoptions
+dir.create("~/Documents/GRNs/pedGBM/int")
+org <- "hgnc" # or mgi, or dmel
+dbDir <- "~/Documents/GRNs/pedGBM/cisTarget_databases"
+myDatasetTitle <- "SCENIC on pedGBM bulk RNASeq" # choose a name for your analysis
+data(defaultDbNames)
+dbs <- defaultDbNames[[org]]
+scenicOptions <- initializeScenic(org=org, dbDir=dbDir, dbs=dbs, datasetTitle=myDatasetTitle, nCores=2)
+
+cellInfo <- colData
+saveRDS(cellInfo, file="~/Documents/GRNs/pedGBM/int/cellInfo.Rds")
+saveRDS(scenicOptions, file ="~/Documents/GRNs/pedGBM/int/scenicOptions.Rds")
+
+scenicOptions@inputDatasetInfo$cellInfo <- "~/Documents/GRNs/pedGBM/int/cellInfo.Rds"
+saveRDS(scenicOptions, file ="~/Documents/GRNs/pedGBM/int/scenicOptions.Rds")
+
+# convert scenic_in rownames (ENSEMBL IDs) to SYMBOLS
+rownames(scenic_in) <-  sapply(strsplit(rownames(scenic_in), split='.', fixed=TRUE), function(x) x[1])
+genes=rownames(scenic_in)
+geneIDs <- ensembldb::select(EnsDb.Hsapiens.v79, keys= genes, keytype = "GENEID", columns = c("SYMBOL","GENEID"))
+geneIDs <- geneIDs[!duplicated(geneIDs$SYMBOL), ]
+
+# replace rownames in scenic_in with gene symbols
+scenic_in <- scenic_in[geneIDs$GENEID, ]
+rownames(scenic_in) <- geneIDs$SYMBOL
+
+# ### Co-expression network
+#genesKept <- geneFiltering(exprMat, scenicOptions)
+#exprMat_filtered <- exprMat[genesKept, ]
+exprMat_filtered <- scenic_in
+exprMat <- scenic_in
+runCorrelation(exprMat_filtered, scenicOptions)
+exprMat_filtered_log <- log2(exprMat_filtered+1)
+runGenie3(exprMat_filtered_log, scenicOptions)
+
+### Build and score the GRN
+exprMat_log <- log2(exprMat+1)
+logMat <- log2(exprMat+1)
+scenicOptions <- readRDS("~/Documents/GRNs/pedGBM/int/scenicOptions.Rds")
+scenicOptions@settings$verbose <- TRUE
+scenicOptions@settings$nCores <- 1
+scenicOptions@settings$seed <- 123
+scenicOptions@inputDatasetInfo$cellInfo <- "~/Documents/GRNs/pedGBM/int/cellInfo.Rds"
+
+# For toy run
+#scenicOptions@settings$dbs <- scenicOptions@settings$dbs["10kb"]
+runSCENIC_1_coexNetwork2modules(scenicOptions)
+#runSCENIC_2_createRegulons(scenicOptions, coexMethod=c("top5perTarget")) #** Only for toy run!!
+runSCENIC_2_createRegulons(scenicOptions)
+runSCENIC_3_scoreCells(scenicOptions, logMat)
+```
+
+```{r}
+# import scenic ouput (auc activity scores and regulon-gene sets)
+auc_pedGBM = readRDS('~/Documents/GRNs/pedGBM/int/3.4_regulonAUC.Rds')
+regulons_pedGBM = readRDS('~/Documents/GRNs/pedGBM/int/2.6_regulons_asGeneSet.Rds')
+```
+
+```{r}
+# check expression of regulons across cell lines, tumor and xenografts
+# heatmap
+dat = data.frame(auc_pedGBM@assays@data@listData)
+colnames(dat) <- gsub (pattern = 'AUC.', replacement = "", colnames(dat))
+colnames(dat) <- gsub (pattern = '\\.', replacement = "", colnames(dat))
+dat = na.omit(t(scale(t(as.matrix(dat)), center = T, scale=T)))
+# generate plots using the extended regulons
+dat <- dat[grep (rownames(dat), pattern = '_extended'), ]
+
+pdf ('~/Documents/GRNs/pedGBM/plots/regulons_heatmap.pdf', width = 4, height = 4)
+pheatmap::pheatmap(dat, fontsize_row=4, color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = annotation_genes, clustering_method = "ward.D2", fontsize_col = 6, show_rownames = FALSE)
+dev.off()
+
+# pca
+pdf('~/Documents/GRNs/pedGBM/plots/regulons_pcas.pdf', width = 4, height = 3)
+dat_pca_regulons <- t(dat) 
+dat_pca_regulons <- rownames_to_column(data.frame(dat_pca_regulons), var = 'sample_ID')
+dat_pca_regulons$clinical_status <- annotation_genes$clinical_status
+dat_pca_regulons$patient <- annotation_genes$patient
+autoplot(prcomp(dat_pca_regulons[, 2:181]), data = dat_pca_regulons, colour='clinical_status')
+autoplot(prcomp(dat_pca_regulons[, 2:181]), data = dat_pca_regulons, colour='patient')
+dev.off()
+```
+
+```{r}
+# ven diagram for common genes, proteins and exons
+# genes
+genes <- unique(rownames(topVarGenes_vst))
+genes <- unique(sapply(strsplit(genes, split='.', fixed=TRUE), function(x) x[1]))
+length(genes)
+
+# exons
+exons_IDs <- rownames(topVarExons_vst)
+exons <- unique(sapply(strsplit(exons_IDs, split = ":", fixed = TRUE), function(x)x[1]))
+exons <- unique(sapply(strsplit(exons, split = "+", fixed = TRUE), function(x)x[1]))
+length (exons)
+
+# regulons
+regulons = unique(unlist(regulons_pedGBM))
+regulons <- ensembldb::select(EnsDb.Hsapiens.v79, keys= regulons, keytype = "SYMBOL", columns = c("SYMBOL","GENEID"))
+regulons <- unique(regulons$GENEID)
+length (regulons)
+
+# proteins
+proteins <- unique(rownames(topVarProteins_vst))
+proteins <- ensembldb::select(EnsDb.Hsapiens.v79, keys= proteins, keytype = "SYMBOL", columns = c("SYMBOL","GENEID"))
+proteins <- unique(proteins$GENEID)
+length(proteins)
+
+
+# venn diagram
+x <- list (exons=exons, proteins=proteins, genes=genes, regulons=regulons)
+ggVennDiagram(x)
+```
+
+```{r}
+# UpSetR
+library (UpSetR)
+listInput <- list (regulons=regulons, genes=genes, exons=exons, proteins=proteins)
+upset(fromList(listInput), order.by = "freq")
+```
+
+```{r}
+regulons_private <- regulons [!regulons %in% exons]
+regulons_private <- regulons_private [!regulons_private %in% genes]
+regulons_private <- regulons_private [!regulons_private %in% proteins]
+```
+

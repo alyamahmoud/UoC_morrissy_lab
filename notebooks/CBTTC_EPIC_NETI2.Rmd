@@ -1,0 +1,227 @@
+---
+title: "CBTTC_EPIC_NETI2"
+author: "Alyaa_Mohamed"
+date: "13/06/2020"
+output: html_document
+---
+```{r}
+library (magrittr)
+library (leiden)
+library(ggVennDiagram)
+library (tidyverse)
+#library (tibble)
+#library (rnaseqWrapper)
+library (pheatmap)
+#library (vsn)
+library (DESeq2)
+library(RColorBrewer)
+library (ggfortify)
+library(EnsDb.Hsapiens.v79)
+library (SCENIC)
+#library (DEXSeq)
+library (tidyverse)
+library (dplyr)
+#library (BiocParallel)
+library (NMF)
+#library (IntNMF)
+#library(rstatix)
+#library(ggpubr)
+library (igraph)
+library (Seurat)
+```
+
+```{r}
+# load scRNAseq data for constructing signatures for downstream use for EPIC
+# including the normal brain cells signature because EPIC prebuilt signatures do not contain microglia for instance, so to account for more cells from 'otherCells' component
+load ('~/Documents/GRNs/TFBS/CBTTC/psychENCODE/Sestan.fetalHuman.Psychencode.Rdata')
+
+brainspan_sc <- count2 # raw counts
+brainspan_meta <- meta2
+
+# normalise brainspan data in Seurat
+brain_span_sc <- CreateSeuratObject(brainspan_sc, min.cells = 3, min.features = 200)
+brain_span_sc <- NormalizeData(brain_span_sc, normalization.method = 'RC')
+
+# extract the normalised object for input in EPIC
+df <- brain_span_sc@assays$RNA
+df <- df@data
+df <- data.frame(df)
+
+# summarise by cell type by taking median of each gene 
+df <- t(df)
+df <- data.frame(df)
+df <- df %>%
+  rownames_to_column(var = 'sample_ID')
+
+df$ctype = brainspan_meta$ctype
+
+df <- df %>%
+  group_by(ctype) %>%
+  summarise_if(is.numeric, median, na.rm = TRUE)
+
+# layout genes * cells
+epic_input <- t(df)
+colnames(epic_input) <- epic_input[1, ]
+epic_input <- epic_input[-1, ]
+epic_input <- data.frame(epic_input)
+
+# EPIC
+# get purity estimates for CBTTC samples
+sigGenes <- read.csv ('~/Documents/GRNs/TFBS/CBTTC/psychENCODE/refProfile_sigGenes_brain_span.txt', stringsAsFactors = FALSE); sigGenes <- as.character(colnames(sigGenes))
+
+# format signature matrix for EPIC input
+epic_input <- epic_input %>%
+  rownames_to_column(var = 'geneName') %>%
+  group_by(geneName) %>%
+  summarise_all(median)
+  
+epic_input$geneName <- sapply(strsplit(epic_input$geneName, split = '\\.'), function(x) x[[2]])
+
+epic_input <- epic_input %>%
+  group_by(geneName) %>%
+  summarise_all(median) 
+epic_input <- epic_input %>% column_to_rownames(var = 'geneName')
+
+# $refProfile is a matrix with genes as rownames, $sigGenes is a character
+epic_reference <- list('refProfiles' = epic_input, 'sigGenes' = sigGenes)
+saveRDS(epic_reference, file = 'EPIC/normal_developing_brain_signature.Rds')
+```
+
+```{r}
+# import gene expression data
+# bulk is a matrix with genes as rownames
+expression_data <- readRDS('pbta-gene-expression-rsem-fpkm-collapsed.stranded.rds')
+expression_data <- as.matrix(expression_data)
+# run EPIC
+out_cbttc <- EPIC(expression_data, reference = epic_reference)
+saveRDS(out_cbttc, file = 'EPIC/out_cbttc.Rds')
+```
+
+```{r}
+# run EPIC using the same signature on the normal cohort
+expression_data <- read_tsv ('psychENCODE/mRNA-seq_hg38.gencode21.wholeGene.geneComposite.STAR.nochrM.gene.RPKM.normalized.CQNCombat.txt')
+
+expression_data$Geneid <- sapply(strsplit(expression_data$Geneid, split = '\\|'), function(x) x[[2]])
+
+expression_data <- expression_data %>%
+  group_by(Geneid) %>%
+  summarise_all(median) %>%
+  column_to_rownames(var = 'Geneid')
+expression_data <- as.matrix(expression_data)
+
+out_brainspan <- EPIC(expression_data, reference = epic_reference)
+saveRDS(out_brainspan, file = 'EPIC/out_brain_span.Rds')
+```
+
+```{r}
+# compare cell fraction proportions from the tumor (CBTTC) and normal (brain span) cohorts
+out_brain_span <- NULL; out_cbttc <- NULL; 
+out_brain_span <- readRDS('EPIC/out_brain_span.Rds')
+out_cbttc <- readRDS('EPIC/out_cbttc.Rds')
+brain_span <- data.frame(out_brain_span$cellFractions)
+cbttc <- data.frame(out_cbttc$cellFractions)
+brain_span$dtype <- rep ('brain_span', dim(brain_span)[1])
+cbttc$dtype <- rep ('cbttc', dim(cbttc)[1])
+
+cbttc <- cbttc %>%
+  dplyr::select('dtype', 'otherCells')
+brain_span <- brain_span %>%
+  dplyr::select('dtype', 'otherCells')
+rownames(brain_span) = NULL; 
+rownames(cbttc) <- NULL; 
+
+dat <- rbind (cbttc, brain_span)
+
+#pdf ('plots/epic_cell_fraction_cbttc_vs_brain_span.pdf',width = 10, height = 4 )
+#ggplot(dat, aes(x=otherCells, fill = dtype)) + 
+#  geom_histogram(binwidth = .03, alpha = .5, position = "identity") +
+#  labs(title = 'EPIC purity estimate, brain span signature', x = 'tumor cells', y = 'cell fraction')  
+#dev.off()
+
+# grouped boxplot
+brain_span = NULL; cbttc = NULL;
+brain_span <- readRDS('EPIC/out_brain_span.Rds')
+cbttc <- readRDS('EPIC/out_cbttc.Rds')
+brain_span <- data.frame(t(out_brain_span$cellFractions)) %>%
+  rownames_to_column(var = 'ctype') %>%
+  reshape2::melt() %>%
+  select(-variable)
+colnames(brain_span) = c('ctype', 'brain_span')
+
+cbttc <- data.frame(t(out_cbttc$cellFractions)) %>%
+  rownames_to_column(var = 'ctype') %>%
+  reshape2::melt() %>%
+  select(-variable)
+colnames(cbttc) = c('ctype', 'cbttc')
+
+dat <- inner_join(cbttc, brain_span, by = 'ctype') 
+dat <- reshape2::melt(dat)
+colnames(dat) <- c('ctype', 'dtype', 'cell_fraction')
+
+pdf ('plots/epic_cell_fraction_cbttc_vs_brain_span.pdf', width = 12, height = 5)
+p <- ggplot(dat, aes(x = ctype, y = cell_fraction, fill = dtype)) + 
+  geom_boxplot()
+p + theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+dev.off()
+```
+
+```{r}
+# TRef signature
+out_brain_span_tref <- readRDS('EPIC/out_brain_span_TRef.Rds')
+out_cbttc_tref <- readRDS('EPIC/out_cbttc_TRef.Rds')
+# grouped boxplot
+brain_span = NULL; cbttc = NULL;
+brain_span <- data.frame(t(out_brain_span_tref$cellFractions)) %>%
+  rownames_to_column(var = 'ctype') %>%
+  reshape2::melt() %>%
+  select(-variable)
+colnames(brain_span) = c('ctype', 'brain_span')
+
+cbttc <- data.frame(t(out_cbttc_tref$cellFractions)) %>%
+  rownames_to_column(var = 'ctype') %>%
+  reshape2::melt() %>%
+  select(-variable)
+colnames(cbttc) = c('ctype', 'cbttc')
+
+dat <- inner_join(cbttc, brain_span, by = 'ctype') 
+dat <- reshape2::melt(dat)
+colnames(dat) <- c('ctype', 'dtype', 'cell_fraction')
+
+pdf ('plots/epic_cell_fraction_cbttc_vs_brain_span_TRef.pdf', width = 6, height = 5)
+p <- ggplot(dat, aes(x = ctype, y = cell_fraction, fill = dtype)) + 
+  geom_boxplot()
+p + theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+dev.off()
+
+```
+
+```{r}
+# merge normal signature with TRef
+TRef$refProfiles <- data.frame(TRef$refProfiles) %>%
+  rownames_to_column(var = 'geneName')
+epic_reference$refProfiles <- data.frame(epic_reference$refProfiles) %>%
+  rownames_to_column(var = 'geneName')
+
+combo = NULL; 
+combo <- full_join(TRef$refProfiles, epic_reference$refProfiles, by = 'geneName')
+combo[is.na(combo)] <- 0
+combo <- combo %>%
+  group_by(geneName) %>%
+  summarise_all(median) %>%
+  column_to_rownames(var = 'geneName')
+
+sig <- append (TRef$sigGenes, epic_reference$sigGenes)
+
+comboRef <- list(refProfiles = combo, sigGenes = sig) 
+saveRDS(comboRef, file = 'EPIC/normal_developing_brain_and_TRef_reference.Rds')
+```
+
+```{r}
+#run EPIC on tumor cohort
+expression_data <- readRDS('pbta-gene-expression-rsem-fpkm-collapsed.stranded.rds')
+expression_data <- as.matrix(expression_data)
+# run EPIC
+out_cbttc_combo <- EPIC(expression_data, reference = comboRef)
+saveRDS(out_cbttc_combo, file = 'EPIC/out_cbttc_combo.Rds')
+```
+

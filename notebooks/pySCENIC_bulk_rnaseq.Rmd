@@ -1,0 +1,92 @@
+---
+title: "tumor_data_scenic_bulk_rnaseq"
+author: "am"
+date: "10/02/2020"
+output: html_document
+---
+```{r}
+# https://rstudio.github.io/reticulate/articles/python_packages.html
+library (reticulate)
+use_condaenv('scenic_protocol', required = TRUE)
+```
+
+```{r}
+#devtools::install_github("aertslab/SCENIC@v1.1.1") 
+suppressPackageStartupMessages({
+  library (data.table)
+  library(extrafont)
+  library(SCENIC)
+  library(AUCell)
+  library(RcisTarget)
+  library(SCopeLoomR)
+  library(Seurat)
+  library (tibble)
+  library (dplyr)
+  library (tidyr)
+  library (tibble)
+  library (stringr)
+  library (igraph)
+  library (scales)
+  library (ggplot2)
+  library (leiden)
+  library(RColorBrewer)
+  library(qgraph)
+})
+```
+
+```{r}
+# import modules
+reticulate::import("pandas")
+reticulate::import ('numpy')
+reticulate::import ('glob')
+reticulate::import ('pickle')
+py_run_string('from arboreto.utils import load_tf_names')
+py_run_string('from arboreto.algo import grnboost2')
+py_run_string('from pyscenic.rnkdb import FeatherRankingDatabase as RankingDatabase')
+py_run_string('from pyscenic.utils import modules_from_adjacencies, load_motifs')
+py_run_string('from pyscenic.prune import prune2df, df2regulons')
+py_run_string('from pyscenic.aucell import aucell')
+reticulate:: import('seaborn')
+
+```
+
+
+```{r}
+# read adjacency matrix as pickle data
+getwd()
+adj <- py_load_object('../data/adjacencies_test.dataframe')
+regulons <- py_load_object('../data/regulons_asIncidMat') # 2.5
+regulomes <- read.csv('../data/regulomes_test.csv', header = TRUE)
+regulonTargetsInfo <- read.csv ('../data/auc_scores.csv', header = TRUE)
+regulonAUC <- read.csv('../data/auc_mtx.csv')
+# alternative method
+# require ('reticulate')
+#source_python('../scripts/pickle_reader.py')
+#regulons <- read_pickle_file('../data/regulons_asIncidMat')
+
+```
+
+```{r}
+# read table with unequal number of columsn (TF-targets)
+# https://sites.psu.edu/biomonika/2017/09/08/reading-text-files-with-variable-number-of-columns-in-r/
+no_col <- max(count.fields('../data/Tf2targets.csv', sep = ","))
+Tf_target <- read.table('../data/Tf2targets.csv',sep=",",fill=TRUE,header = F,col.names=c("chr", "start", "end", "length",1:no_col))
+
+rownames(Tf_target) = Tf_target$chr; Tf_target = Tf_target[,-1]
+
+# convert to list (r object)
+regulons <- as.list(as.data.frame(t(Tf_target)))
+
+# convert 2.5_regulons_asGeneSet to 2.6_regulons_asIncidMat
+incidList <- reshape2::melt(regulons)
+incidList <- incidList[!incidList$value == "", ]; incidList <- na.omit(incidList)
+incidMat <- table(incidList[,2], incidList[,1])
+
+# TODO NMF::aheatmap(incidMat)
+# TODO complex heatmap
+#saveRDS(incidMat, file=getIntName(scenicOptions, "regulons_incidMat"))
+length(regulons) 
+#summary(lengths(regulons))
+```
+
+

@@ -1,0 +1,206 @@
+---
+title: "pySCENIC_individual_time_points"
+author: "am"
+date: "23/12/2019"
+output: html_document
+---
+```{r}
+# https://rstudio.github.io/reticulate/articles/python_packages.html
+library (reticulate)
+use_condaenv('scenic_protocol', required = TRUE)
+```
+
+```{r}
+#devtools::install_github("aertslab/SCENIC@v1.1.1") 
+suppressPackageStartupMessages({
+  library (data.table)
+  library(extrafont)
+  library(SCENIC)
+  library(AUCell)
+  library(RcisTarget)
+  library(SCopeLoomR)
+  library(Seurat)
+  library (tibble)
+  library (dplyr)
+  library (tidyr)
+  library (tibble)
+  library (stringr)
+  library (igraph)
+  library (scales)
+  library (ggplot2)
+  library (leiden)
+  library(RColorBrewer)
+  library(qgraph)
+})
+```
+
+```{r}
+# activity scores for individual time points
+e10a <- read.csv('../data/individual_time_points/e10A/auc_mtx.csv'); e10a <- column_to_rownames(e10a, var = 'Cell'); 
+e11a <- read.csv('../data/individual_time_points/e11A/auc_mtx.csv'); e11a <- column_to_rownames(e11a, var = 'Cell'); 
+e12a <- read.csv('../data/individual_time_points/e12A/auc_mtx.csv'); e12a <- column_to_rownames(e12a, var = 'Cell'); 
+e13a <- read.csv('../data/individual_time_points/e13A/auc_mtx.csv'); e13a <- column_to_rownames(e13a, var = 'Cell'); 
+e14a <- read.csv('../data/individual_time_points/e14A/auc_mtx.csv'); e14a <- column_to_rownames(e14a, var = 'Cell'); 
+e15a <- read.csv('../data/individual_time_points/e15A/auc_mtx.csv'); e15a <- column_to_rownames(e15a, var = 'Cell'); 
+e16a <- read.csv('../data/individual_time_points/e16A/auc_mtx.csv'); e16a <- column_to_rownames(e16a, var = 'Cell'); 
+e17a <- read.csv('../data/individual_time_points/e17A/auc_mtx.csv'); e17a <- column_to_rownames(e17a, var = 'Cell'); 
+P00a <- read.csv('../data/individual_time_points/P0OA/auc_mtx.csv'); P00a <- column_to_rownames(P00a, var = 'Cell'); 
+P04a <- read.csv('../data/individual_time_points/P04A/auc_mtx.csv'); P04a <- column_to_rownames(P04a, var = 'Cell'); 
+P07a <- read.csv('../data/individual_time_points/P07A/auc_mtx.csv'); P07a <- column_to_rownames(P07a, var = 'Cell'); 
+P10a <- read.csv('../data/individual_time_points/P10A/auc_mtx.csv'); P10a <- column_to_rownames(P10a, var = 'Cell');
+```
+
+
+```{r}
+# modules in individual time points 
+Regulon_comb_e10A <- readRDS ('../data/individual_time_points/e10A/Regulon_comb_e10A.Rds')
+Regulon_comb_e11A <- readRDS ('../data/individual_time_points/e11A/Regulon_comb_e11A.Rds')
+Regulon_comb_e12A <- readRDS ('../data/individual_time_points/e12A/Regulon_comb_e12A.Rds')
+Regulon_comb_e13A <- readRDS ('../data/individual_time_points/e13A/Regulon_comb_e13A.Rds')
+Regulon_comb_e14A <- readRDS ('../data/individual_time_points/e14A/Regulon_comb_e14A.Rds')
+Regulon_comb_e15A <- readRDS ('../data/individual_time_points/e15A/Regulon_comb_e15A.Rds')
+Regulon_comb_e16A <- readRDS ('../data/individual_time_points/e16A/Regulon_comb_e16A.Rds')
+Regulon_comb_e17A <- readRDS ('../data/individual_time_points/e17A/Regulon_comb_e17A.Rds')
+Regulon_comb_P0OA <- readRDS ('../data/individual_time_points/P0OA/Regulon_comb_P0OA.Rds')
+Regulon_comb_P04A <- readRDS ('../data/individual_time_points/P04A/Regulon_comb_P04A.Rds')
+Regulon_comb_P07A <- readRDS ('../data/individual_time_points/P07A/Regulon_comb_P07A.Rds')
+Regulon_comb_P10A <- readRDS ('../data/individual_time_points/P10A/Regulon_comb_P10A.Rds')
+
+```
+
+```{r}
+#e10A
+incidMat_e10A <- readRDS ('../data/individual_time_points/e10A/incidMat.Rds')
+
+Reg <- incidMat_e10A
+tab <- Regulon_comb_e10A
+tab$R1_R2_genes <- NULL
+tab <- tab %>% 
+cbind(percentage =(round(  as.numeric(as.character(tab$nR1_R2_genes))   /  ((as.numeric(as.character(tab$nR1_genes))+as.numeric(as.character(tab$nR2_genes))) - as.numeric(as.character(tab$nR1_R2_genes)))  ,3))*100) %>% 
+cbind(incidence = round(((as.numeric(as.character(tab$nR1_genes))+as.numeric(as.character(tab$nR2_genes))) - as.numeric(as.character(tab$nR1_R2_genes))) /ncol(Reg),3))
+tab <- tab %>% separate(Reg2, c("Regulon2","suffix2"), sep = "_")
+tab <- tab %>% separate(Reg1, c("Regulon1","suffix1"), sep = "_")
+tab <- tab[subset(rownames(tab), tab$Regulon1 != tab$Regulon2),]
+reg1 <- paste(tab$Regulon1, tab$suffix1, sep = "_")
+reg2 <- paste(tab$Regulon2, tab$suffix2, sep = "_")
+reg1 <- gsub("_NA","",reg1)
+reg2 <- gsub("_NA","",reg2)
+tab$Regulon1 <- reg1
+tab$Regulon2 <- reg2
+tab$suffix1 <- NULL
+tab$suffix2 <- NULL
+
+# activity scores for individual time points
+#AUC <- regulonAUC
+AUC <- e10a
+AUC <- cor(AUC, method="spearman") # potentially consider MI
+AUC <- data.frame(row=rownames(AUC)[row(AUC)], col=colnames(AUC)[col(AUC)], corr=c(AUC))
+AUC <- AUC %>% separate(row, c("Reg1","G1"), sep=" ")
+AUC <- AUC %>% separate(col, c("Reg2","G2"), sep=" ")
+colnames(AUC) [1] <- c('Regulon1')
+colnames(AUC) [3] <- c('Regulon2')
+AUC$G1 <- NULL
+AUC$G2 <- NULL
+AUC <- na.omit(AUC)
+ggplot(AUC, aes(x = corr)) + geom_density()
+ggplot(AUC, aes(x = corr)) + geom_histogram(binwidth = .1)
+quantile(AUC$corr)
+
+# filter by corr based on activity score
+pos <- AUC[AUC$corr >= quantile(AUC$corr, 0.99), ]
+neg <- AUC[AUC$corr <= quantile(AUC$corr, 0.01), ]
+dim(pos)
+dim(neg)
+AUC_sig <- rbind (pos, neg)
+
+# dot plot for incidence and % overlap
+# append incidence and percentage to AUC corr values
+dat <- rbind(pos, neg)
+rownames(dat) <- paste(dat$Regulon2, dat$Regulon1, sep = "-")  
+rownames(tab) <- paste(tab$Regulon1, tab$Regulon2, sep = "-")
+dat <- tibble ::rownames_to_column (dat, var = 'ID')
+tab <- tibble :: rownames_to_column (tab, var = 'ID')
+# join by ID
+dat <- inner_join(tab, dat, by = 'ID')
+# fct_rev to get lower triangular plot
+library (forcats)
+dat$Regulon2.y = forcats::fct_rev(factor(dat$Regulon2.y))
+# draw the dotplot
+dotplot <- ggplot2::ggplot(data = dat, mapping =  ggplot2::aes(x = Regulon1.y, y = Regulon2.y)) + 
+  #ggplot2::geom_point(mapping = ggplot2::aes(color = corr, size = ifelse(percentage==0.00, NA, percentage))) + 
+  ggplot2::geom_point(mapping = ggplot2::aes(color = corr, size = percentage)) + 
+  ggplot2::theme(axis.text.x.bottom = ggplot2::element_text(angle = 90, vjust = 0, hjust = 1, size = 4)) +
+  ggplot2::theme(axis.text.y = ggplot2::element_text(size = 4)) +
+  ggplot2::ggtitle("correlated regulons") + ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5)) +
+  ggplot2::scale_x_discrete(position = "bottom") + ggplot2::labs(size = 'percentage of overalapping genes', color = 'correlation between regulons activity scores')
+
+pdf("../plots/correlated_regulons_e10A_dotplot.pdf", height = 10, width = 12)
+plot(dotplot)
+dev.off()
+```
+
+```{r}
+# network
+sub = NULL; sub = dat
+REG1 <- data.frame(Regulon1 = sub$Regulon1.x, n_genes = sub$nR1_genes)
+REG1 <- unique(REG1)
+REG2 <- data.frame(Regulon1 = sub$Regulon2.x, n_genes = sub$nR2_genes)
+REG2 <- unique(REG2)
+nodes <- unique(rbind(REG1,REG2))  #Assign TF as nodes
+rownames(nodes) <- NULL
+names(nodes) <- c("Regulons","n_genes")
+links <- data.frame(Regulon1 = sub$Regulon1.x, Regulon2 = sub$Regulon2.x, percentage = sub$percentage, corr = sub$corr) #Info on nodes and edges
+net <- graph.data.frame(d = links, vertices = nodes, directed = F)
+centrality = eigen_centrality(net)$vector  #Measure centrality
+centrality <- data.frame(centrality)
+#leastcentral <- subset(rownames(centrality), centrality$centrality < (fivenum(centrality$centrality)[3]))  
+# remove nodes with less than 25% of centrality values
+leastcentral <- subset(rownames(centrality), centrality$centrality < (quantile(centrality$centrality)[2]))
+net <- delete_vertices(net, leastcentral) #Remove nodes with least centrality
+
+#Graph attributes
+# nodes
+#colrs <- c("gray50", "tomato", "gold")
+#Compute node degrees (#links) and use that to set node size:
+#deg <- degree(net, mode="all")
+#V(net)$size <- deg/3
+V(net)$size <- as.numeric(V(net)$n_genes)*0.01
+E(net)$edge.width <- abs(E(net)$percentage)*2
+E(net)$color <- ifelse(E(net)$corr > 0, "blue","red")
+
+#Plot
+pdf("../plots/corrleated_regulons_e10A_net.pdf")
+plot(net,vertex.label.cex = 0.5,vertex.color = "orange", edge.color = E(net)$edge.color,edge.width = E(net)$width, vertex.size = V(net)$size, vertex.label.font = 2, vertex.label.dist = 0.8, layout = layout_with_graphopt,main = 'base network')
+
+# louvain 
+# https://igraph.org/r/doc/cluster_louvain.html
+communities <- cluster_louvain (net, weights = E(net)$edge.width)
+membership(communities); e10A_communities_membership = membership(communities)
+modularity(communities)
+plot(communities, net, layout=layout_with_graphopt, vertex.label.dist=0.5, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.color = E(net)$edge.color, edge.width = E(net)$edge.width/8, main = 'louvain clusters')
+
+# leiden
+adjacency_matrix <- igraph::as_adjacency_matrix(net, edges = TRUE)
+# run the leiden algorithm on the adjacency matrix
+partition <- leiden(adjacency_matrix, resolution_parameter = 1, node_sizes = V(net)$size, weights = NULL)
+table(partition)
+# visualise
+node.cols <- brewer.pal(max(c(4, partition)),"Set3")[partition]
+#node.cols <- rainbow(5, alpha=.5)
+#node.cols <- brewer.pal(4, "Set3")
+plot(net, layout=layout_with_graphopt, vertex.color = node.cols, edge.color = E(net)$edge.color, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.width = E(net)$edge.width/8, main = 'leiden clusters')
+
+dev.off()
+
+saveRDS(net, file = '../data/individual_time_points/e10A/correlated_regulons.Rds')
+```
+```{r}
+# comparing networks
+# use metrics like centrality, degree, betweeness, modularity, hubs/authorities, communities and cliques ...etc to compare indvidiual time points nets 
+# https://kateto.net/netscix2016.html
+library (BioNet)
+pdf ('plots/compare_e10_vs_p10_nets.pdf')
+compareNetworks(P10net, e10net, plot = TRUE)
+dev.off()
+```
+

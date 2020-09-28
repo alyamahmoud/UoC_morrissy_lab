@@ -1,0 +1,667 @@
+---
+title: "CBTTC"
+author: "Alyaa_Mohamed"
+date: "13/05/2020"
+output: html_document
+---
+```{r}
+library (magrittr)
+library (leiden)
+library(ggVennDiagram)
+library (tidyverse)
+library (tibble)
+library (rnaseqWrapper)
+library (pheatmap)
+library (vsn)
+library (DESeq2)
+library(RColorBrewer)
+library (ggfortify)
+library(EnsDb.Hsapiens.v79)
+library (SCENIC)
+library (DEXSeq)
+library (tidyverse)
+library (dplyr)
+library (BiocParallel)
+library (NMF)
+library (IntNMF)
+library(rstatix)
+library(ggpubr)
+library (igraph)
+```
+
+```{r}
+# CBTTC proteomics data 
+dat_proteomics <- read_tsv('~/Documents/GRNs/TFBS/CBTTC/proteomics/S047_QuantifiedProtein-23Sets-wo-Reversehit_and_Contam_06102019.txt')
+colnames(dat_proteomics)[1:3] = c('protein_ID', 'gene_symbol', 'description')
+
+# read in metadata
+cbttc_metadata <- read_tsv('~/Documents/GRNs/TFBS/CBTTC/proteomics/S047_Pediatric_Brain_Cancer_Clinical_Data_r1.txt') %>%
+  dplyr::select(Kids.First.ID, Clinical.Event.Id, diagnosis_type, diagnosis, Multiple.Tumor.Locations)
+
+annotation_proteins <- cbttc_metadata %>%
+  column_to_rownames(var = 'Clinical.Event.Id') %>%
+  dplyr::select(-'Kids.First.ID')
+
+df_visualisation = na.omit(dat_proteomics)
+colnames(df_visualisation)[1:3] <- c('protein_id', 'gene_symbol', 'description')
+df_visualisation <- df_visualisation %>%
+  dplyr::select(-'protein_id', -'description') %>%
+  group_by(gene_symbol) %>%
+  summarise_all(mean) %>%
+  column_to_rownames(var = 'gene_symbol')
+
+
+pdf ('~/Documents/GRNs/TFBS/CBTTC/plots/proteomics_heatmap.pdf', width = 12, height = 8)
+df_visualisation <- df_visualisation[, colnames(df_visualisation) %in% rownames(annotation_proteins)]
+pheatmap::pheatmap(df_visualisation, fontsize_row=4, color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = annotation_proteins, clustering_method = "ward.D2", fontsize_col = 6, show_rownames = FALSE, scale= 'row')
+dev.off()
+```
+
+```{r}
+# scenic -- genes
+# import scenic ouput (auc activity scores and regulon-gene sets)
+auc_proteins = readRDS('~/Documents/GRNs/TFBS/CBTTC/proteomics/scenic/int/3.4_regulonAUC.Rds')
+regulons_proteins = readRDS('~/Documents/GRNs/TFBS/CBTTC/proteomics/scenic/int/2.6_regulons_asGeneSet.Rds')
+# check expression of regulons across cell lines, tumor and xenografts
+# heatmap
+dat = data.frame(assay(auc_proteins))
+dat = na.omit(t(scale(t(as.matrix(dat)), center = T, scale=T)))
+colnames(dat) <- gsub (pattern = 'X', replacement='', colnames(dat))
+colnames(dat) <- gsub (pattern = '\\.', replacement='-', colnames(dat))
+# generate plots using the extended regulons
+#dat <- dat[grep (rownames(dat), pattern = '_extended'), ]
+
+pdf ('~/Documents/GRNs/TFBS/CBTTC/plots/regulons_proteins_heatmap.pdf', width = 12, height = 4)
+dat <- dat[, colnames(dat) %in% rownames(annotation_proteins)]
+pheatmap::pheatmap(dat, fontsize_row=4, color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = annotation_proteins, clustering_method = "ward.D2", fontsize_col = 3, show_rownames = FALSE)
+dev.off()
+
+# pca
+pdf('~/Documents/GRNs/TFBS/CBTTC/plots/regulons_proteins_pca.pdf', width = 12, height = 8)
+dat_pca_regulons <- t(dat) 
+dat_pca_regulons <- rownames_to_column(data.frame(dat_pca_regulons), var = 'sample_ID')
+dat_pca_regulons$diagnosis_type <- annotation_proteins$diagnosis_type
+dat_pca_regulons$diagnosis <- annotation_proteins$diagnosis
+dat_pca_regulons$Multiple.Tumor.Locations <- annotation_proteins$Multiple.Tumor.Locations
+autoplot(prcomp(dat_pca_regulons[, 2:56]), data = dat_pca_regulons, colour='diagnosis_type')
+autoplot(prcomp(dat_pca_regulons[, 2:56]), data = dat_pca_regulons, colour='diagnosis')
+autoplot(prcomp(dat_pca_regulons[, 2:56]), data = dat_pca_regulons, colour='Multiple.Tumor.Locations')
+dev.off()
+```
+
+```{r}
+# compute incidence and percentage relative to AUC activity scores
+incidMat <- readr::read_rds('~/Documents/GRNs/TFBS/CBTTC/proteomics/scenic/int/2.6_regulons_asIncidMat.Rds')
+Reg <- incidMat   #TF x genes #incidMat
+R_comb <- combn(rownames(Reg), m=2)  #Create pairwise combinations
+
+# Create required dataframe 
+Reg1 = Reg2  = nR1_genes = nR2_genes = nR1_R2_genes = R1_R2_genes = NULL;
+ 
+for (comb in 1:ncol(R_comb)) {
+  #two_genes <- print(as.character(gene_comb2[,combo]))
+ 
+  two_R <- as.character(R_comb[,comb])
+  R1 <- data.frame(Reg[which(rownames(Reg) == two_R[1]),])
+  R2 <- data.frame(Reg[which(rownames(Reg) == two_R[2]),])
+  R1_2 <- cbind(R1, R2)
+  colnames(R1_2) <- c("R1", "R2")
+  nR1_2 <- length(which(R1_2[,1] > 0 & R1_2[,2] > 0))
+  R1R2_genes <- rownames(R1_2[which(R1_2[,1] > 0 & R1_2[,2] > 0),])
+  R1R2_genes <- paste(R1R2_genes,collapse=",")
+  #common_Regs <- paste(cat(rownames(samples1_2[which(samples1_2[,1] > 0 & samples1_2[,2] > 0),]), sep = “,”))
+  Reg1 = c(Reg1, two_R[1])
+  Reg2 = c(Reg2, two_R[2])
+  nR1_R2_genes = c(nR1_R2_genes, nR1_2)
+  nR1_genes = c(nR1_genes, sum(R1_2[,1]))
+  nR2_genes = c(nR2_genes, sum(R1_2[,2]))
+ R1_R2_genes = c(R1_R2_genes, R1R2_genes[1])
+ }
+ Regulon_comb <- data.frame(cbind(Reg1 ,Reg2 ,nR1_R2_genes, nR1_genes , nR2_genes ,R1_R2_genes))
+ Regulon_comb$R1_R2_genes <- as.character(Regulon_comb$R1_R2_genes)
+ Regulon_comb$R1_R2_genes[Regulon_comb$R1_R2_genes == ""] <- "NA"
+ saveRDS(Regulon_comb, file = '../data/Regulon_comb_replicate_A.Rds')
+ 
+## Calculate percentage and incidence from the incidence matrix
+# Percentage -> proportion of overlapping genes
+# % = nR1_R2_genes/(nR1_genes + nR2_genes) - nR1_R2_genes
+
+# Incidence -> proportion of genes regulated by the TF pair out of total
+# incidence = (nR1_genes + nR2_genes - nR1_R2_genes)/number_of_genes_in_regulons
+tab <- Regulon_comb
+tab$R1_R2_genes <- NULL
+#tab <- tab[subset(rownames(tab), tab$nR1_R2_genes != 0),]  #Remove TFs that do not have overlapping genes
+# I commented this line because we need to look at regulons that do not have overlapping genes but have correlated activity scores
+#Reg <- readRDS("int/2.6_regulons_asIncidMat.Rds")
+tab <- tab %>% 
+cbind(percentage =(round(  as.numeric(as.character(tab$nR1_R2_genes))   /  ((as.numeric(as.character(tab$nR1_genes))+as.numeric(as.character(tab$nR2_genes))) - as.numeric(as.character(tab$nR1_R2_genes)))  ,3))*100) %>% 
+cbind(incidence = round(((as.numeric(as.character(tab$nR1_genes))+as.numeric(as.character(tab$nR2_genes))) - as.numeric(as.character(tab$nR1_R2_genes))) /ncol(Reg),3))
+
+tab <- tab %>% separate(Reg2, c("Regulon2","suffix2"), sep = "_")
+tab <- tab %>% separate(Reg1, c("Regulon1","suffix1"), sep = "_")
+tab <- tab[subset(rownames(tab), tab$Regulon1 != tab$Regulon2),]
+
+reg1 <- paste(tab$Regulon1, tab$suffix1, sep = "_")
+reg2 <- paste(tab$Regulon2, tab$suffix2, sep = "_")
+#Remove NA
+reg1 <- gsub("_NA","",reg1)
+reg2 <- gsub("_NA","",reg2)
+
+#Repopulate the dataframe
+tab$Regulon1 <- reg1
+tab$Regulon2 <- reg2
+tab$suffix1 <- NULL
+tab$suffix2 <- NULL
+
+# commented this line because we need to look at correlated regulons by activity scores that might have non-overlapping genes
+#Keep TF pairs regulating more than 15% of overlapping genes
+#tab1 <- tab[subset(rownames(tab),tab$percentage > 20),]
+# Calculate correlation between regulons based on activity scores
+# library(AUCell)
+#AUC <- readRDS("int/3.4_regulonAUC.Rds") # Regulons * cells
+#AUC <- getAUC(AUC)
+AUC <- data.frame(assay(auc_proteins))
+colnames(AUC) <- gsub (pattern = 'X', replacement='', colnames(AUC))
+AUC <- cor(t(AUC), method="spearman") # potentially consider MI
+AUC <- data.frame(row=rownames(AUC)[row(AUC)], col=colnames(AUC)[col(AUC)], corr=c(AUC))
+
+AUC <- AUC %>% separate(row, c("Reg1","G1"), sep=" ")
+AUC <- AUC %>% separate(col, c("Reg2","G2"), sep=" ")
+colnames(AUC) [1] <- c('Regulon1')
+colnames(AUC) [3] <- c('Regulon2')
+AUC$G1 <- NULL
+AUC$G2 <- NULL
+
+# check correlation values distribution
+ggplot(AUC, aes(x = corr)) + geom_density()
+ggplot(AUC, aes(x = corr)) + geom_histogram(binwidth = .1)
+
+quantile(AUC$corr)
+
+# filter by corr based on activity score
+# top 10% percentile from each direction
+pos <- AUC[AUC$corr >= 0.972082 , ] 
+neg <- AUC[AUC$corr <= -0.6234659 , ]
+dim(pos); rownames(pos) = NULL
+dim(neg); rownames(neg) = NULL
+
+# generate matrix of highly correlated regulons
+pos  <- pos[!pos$Regulon1 == pos$Regulon2, ]; rownames(pos) = NULL
+neg <- neg[!neg$Regulon1 == neg$Regulon2, ]; rownames(neg) = NULL
+AUC_sig <- rbind (pos, neg); rownames(AUC_sig) = NULL
+dim(AUC_sig)
+# dot plot for incidence and % overlap
+# append incidence and percentage to AUC corr values
+dat <- AUC_sig
+rownames(dat) <- paste(dat$Regulon2, dat$Regulon1, sep = "-")  
+rownames(tab) <- paste(tab$Regulon1, tab$Regulon2, sep = "-")
+dat <- tibble ::rownames_to_column (dat, var = 'ID')
+tab <- tibble :: rownames_to_column (tab, var = 'ID')
+# join by ID
+dat <- inner_join(tab, dat, by = 'ID')
+# fct_rev to get lower triangular plot
+library (forcats)
+dat$Regulon2.y = forcats::fct_rev(factor(dat$Regulon2.y))
+
+# draw the dotplot
+dotplot <- ggplot2::ggplot(data = dat, mapping =  ggplot2::aes(x = Regulon1.y, y = Regulon2.y)) + 
+  #ggplot2::geom_point(mapping = ggplot2::aes(color = corr, size = ifelse(percentage==0.00, NA, percentage))) + 
+  ggplot2::geom_point(mapping = ggplot2::aes(color = corr, size = percentage)) + 
+  ggplot2::theme(axis.text.x.bottom = ggplot2::element_text(angle = 90, vjust = 0, hjust = 1, size = 4)) +
+  ggplot2::theme(axis.text.y = ggplot2::element_text(size = 4)) +
+  ggplot2::ggtitle("correlated regulons") + ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5)) +
+  ggplot2::scale_x_discrete(position = "bottom") + ggplot2::labs(size = 'percentage of overalapping genes', color = 'correlation between regulons activity scores')
+
+# plot the network
+sub = NULL; sub = dat[dat$Regulon1.x %in% AUC_sig$Regulon1 & dat$Regulon2.x %in% AUC_sig$Regulon2, ]
+REG1 <- data.frame(Regulon1 = sub$Regulon1.x, n_genes = sub$nR1_genes)
+REG1 <- unique(REG1)
+REG2 <- data.frame(Regulon1 = sub$Regulon2.x, n_genes = sub$nR2_genes)
+REG2 <- unique(REG2)
+nodes <- unique(rbind(REG1,REG2))  #Assign TF as nodes
+rownames(nodes) <- NULL
+names(nodes) <- c("Regulons","n_genes")
+links <- data.frame(Regulon1 = sub$Regulon1.x, Regulon2 = sub$Regulon2.x, percentage = sub$percentage, corr = sub$corr) #Info on nodes and edges
+net <- graph.data.frame(d = links, vertices = nodes, directed = F)
+centrality = eigen_centrality(net)$vector  #Measure centrality
+centrality <- data.frame(centrality)
+#leastcentral <- subset(rownames(centrality), centrality$centrality < (fivenum(centrality$centrality)[3]))  
+# remove nodes with less than 25% of centrality values
+leastcentral <- subset(rownames(centrality), centrality$centrality < (quantile(centrality$centrality)[2]))
+net <- delete_vertices(net, leastcentral) #Remove nodes with least centrality
+
+#Graph attributes
+# nodes
+colrs <- c("gray50", "tomato", "gold")
+#Compute node degrees (#links) and use that to set node size:
+#deg <- degree(net, mode="all")
+#V(net)$size <- deg/3
+V(net)$size <- as.numeric(V(net)$n_genes)*0.01
+#V(net)$label.color <- "black"
+#E(net)$width <-  rescale(E(net)$corr, to = c(0.5,2.5))
+#E(net)$width <-  rescale(E(net)$corr, to = c(0,2))
+#E(net)$edge.color <- c("slategrey", "dark red")[(E(net)$corr < 0)+1]
+#E(net)$edge.color <- c("slategrey", "dark red")[(E(net)$corr < 0)*-1]
+#col1 <- adjustcolor( "blue", alpha.f = 0.3) # +ve correlation
+#col2 <- adjustcolor( "red", alpha.f = 0.3)  # -ve correlation
+#E(net)$edge.color <- c(col1, col2)[(E(net)$corr < 0)]
+#E(net)$edge.color <- c(col1, col2)
+# edges
+E(net)$edge.width <- abs(E(net)$corr)
+E(net)$color <- ifelse(E(net)$corr > 0, "blue","red")
+
+#Plot
+plot(net,vertex.label.cex = 0.5,vertex.color = "orange", edge.color = E(net)$edge.color,edge.width = E(net)$width, vertex.size = V(net)$size, vertex.label.font = 2, vertex.label.dist = 0.8, layout = layout_with_graphopt)
+
+# cluster the networks
+# https://cran.r-project.org/web/packages/leiden/vignettes/run_leiden.html
+# leiden
+adjacency_matrix <- igraph::as_adjacency_matrix(net, edges = TRUE)
+# run the leiden algorithm on the adjacency matrix
+partition <- leiden(adjacency_matrix, resolution_parameter = 1, node_sizes = V(net)$size, weights = NULL)
+table(partition)
+
+# visualise
+node.cols <- brewer.pal(max(c(4, partition)),"Set3")[partition]
+#node.cols <- rainbow(5, alpha=.5)
+#node.cols <- brewer.pal(4, "Set3")
+plot(net, vertex.color = node.cols, edge.color = E(net)$edge.color, , vertex.label.cex = 0.5)
+plot(net, layout=layout_with_fr, vertex.color = node.cols, edge.color = E(net)$edge.color, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.width = E(net)$edge.width/8)
+
+plot(net, layout=layout_with_kk, vertex.color = node.cols, edge.color = E(net)$edge.color, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.width = E(net)$edge.width/8)
+
+plot(net, layout=layout_with_mds, vertex.color = node.cols, edge.color = E(net)$edge.color, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.width = E(net)$edge.width/8)
+
+plot(net, layout=layout_with_lgl, vertex.color = node.cols, edge.color = E(net)$edge.color, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.width = E(net)$edge.width/8)
+
+# community detection based on label propagation
+clp <- cluster_label_prop(net)
+class(clp)
+
+# louvain 
+# https://igraph.org/r/doc/cluster_louvain.html
+communities <- cluster_louvain (net, weights = E(net)$edge.width)
+membership(communities)
+modularity(communities)
+
+plot(communities, net, layout=layout_with_fr, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.color = E(net)$edge.color, edge.width = E(net)$edge.width/8, vertex.color = node.cols)
+
+plot(communities, net, layout=layout_with_kk, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.color = E(net)$edge.color, edge.width = E(net)$edge.width/8)
+
+plot(communities, net, layout=layout_with_mds, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.color = E(net)$edge.color, edge.width = E(net)$edge.width/8)
+
+plot(communities, net, layout=layout_with_lgl, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.color = E(net)$edge.color, edge.width = E(net)$edge.width/8)
+```
+```{r}
+# extract targets of regulosn/louvain community
+community_1_proteomics <- membership(communities)[membership(communities) == 1]
+community_2_proteomics <- membership(communities)[membership(communities) == 2]
+community_3_proteomics <- membership(communities)[membership(communities) == 3]
+
+community_1_targets_proteomics <- regulons_proteins[names(regulons_proteins) %in% names(community_1_proteomics)]; community_1_targets_proteomics = unlist (community_1_targets_proteomics)
+
+community_2_targets_proteomics <- regulons_proteins[names(regulons_proteins) %in% names(community_2_proteomics)]; community_2_targets_proteomics = unlist (community_2_targets_proteomics)
+
+community_3_targets_proteomics <- regulons_proteins[names(regulons_proteins) %in% names(community_3_proteomics)]; community_3_targets_proteomics = unlist (community_3_targets_proteomics)
+
+
+library (UpSetR)
+listInput <- list (community_1 = community_1_targets_proteomics, community_2 = community_2_targets_proteomics, community_3 = community_3_targets_proteomics)
+upset(fromList(listInput), order.by = "freq")
+
+common <- intersect(community_1_targets_proteomics, community_2_targets_proteomics)
+common <- intersect(common, community_3_targets_proteomics)
+tmp23 <- intersect(community_2_targets_proteomics, community_3_targets_proteomics); tmp23 <- tmp23[!tmp23 %in% common]
+tmp12 <- intersect(community_1_targets_proteomics, community_2_targets_proteomics); tmp12 <- tmp12[!tmp12 %in% common]
+tmp13 <- intersect(community_1_targets_proteomics, community_3_targets_proteomics); tmp13 <- tmp13[!tmp13 %in% common]
+
+community_3_targets_proteomics <- community_3_targets_proteomics[!community_3_targets_proteomics %in% common]
+
+community_3_targets_proteomics <- community_3_targets_proteomics[!community_3_targets_proteomics %in% tmp12]
+
+write.table (community_2_targets_proteomics, file = 'proteomics/', sep = '\t', quote = FALSE, row.names = FALSE, col.names = FALSE)
+```
+
+
+```{r setup, include=FALSE}
+# CBTTC rnaseq analysis 
+setwd('~/Documents/GRNs/TFBS/CBTTC/')
+expression_file <- "~/Documents/GRNs/TFBS/CBTTC/pbta-gene-expression-rsem-fpkm-collapsed.stranded.rds" 
+
+# Read in expression data
+expression_data <- readr::read_rds(expression_file) %>%
+  as.data.frame()
+dim(expression_data)
+
+# read in annotation
+histologies <- read_tsv('pbta-histologies.tsv') 
+histologies <- histologies[histologies$Kids_First_Biospecimen_ID %in% colnames(expression_data), ]
+# subset expression data for which there is matched proteomics data
+histologies <- histologies[histologies$Kids_First_Participant_ID %in% cbttc_metadata$Kids.First.ID, ]
+histologies <- histologies %>%
+  dplyr::select(Kids_First_Biospecimen_ID, short_histology, broad_histology, broad_composition, Kids_First_Participant_ID) %>%
+  column_to_rownames(var = 'Kids_First_Biospecimen_ID')
+
+# subset expression data for which there is matched proteomics data
+expression_data <- expression_data[, colnames(expression_data) %in% rownames(histologies)]
+```
+
+```{r}
+# scenic -- genes
+# import scenic ouput (auc activity scores and regulon-gene sets)
+auc_genes_tumor = readRDS('~/Documents/GRNs/TFBS/CBTTC/rnaseq/scenic_matched_proteomics/int/3.4_regulonAUC.Rds')
+regulons_genes_tumor = readRDS('~/Documents/GRNs/TFBS/CBTTC/rnaseq/scenic_matched_proteomics/int/2.6_regulons_asGeneSet.Rds')
+# check expression of regulons across cell lines, tumor and xenografts
+# heatmap
+dat = data.frame(assay(auc_genes_tumor))
+dat = na.omit(t(scale(t(as.matrix(dat)), center = T, scale=T)))
+# generate plots using the extended regulons
+#dat <- dat[grep (rownames(dat), pattern = '_extended'), ]
+
+pdf ('~/Documents/GRNs/TFBS/CBTTC/plots/regulons_genes_heatmap.pdf', width = 12, height = 10)
+pheatmap::pheatmap(dat, fontsize_row=4, color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = histologies[,-4], clustering_method = "ward.D2", fontsize_col = 3, show_rownames = FALSE)
+dev.off()
+
+# pca
+pdf('~/Documents/GRNs/TFBS/CBTTC/plots/regulons_genes_pca.pdf', width = 12, height = 8)
+dat_pca_regulons <- t(dat) 
+dat_pca_regulons <- rownames_to_column(data.frame(dat_pca_regulons), var = 'sample_ID')
+dat_pca_regulons$short_histology <- histologies$short_histology
+dat_pca_regulons$broad_composition <- histologies$broad_composition
+dat_pca_regulons$broad_histology <- histologies$broad_histology
+autoplot(prcomp(dat_pca_regulons[, 2:801]), data = dat_pca_regulons, colour='short_histology')
+autoplot(prcomp(dat_pca_regulons[, 2:801]), data = dat_pca_regulons, colour='broad_histology')
+autoplot(prcomp(dat_pca_regulons[, 2:801]), data = dat_pca_regulons, colour='broad_composition')
+dev.off()
+```
+
+```{r}
+# UpSetR
+library (UpSetR)
+listInput <- list (regulons_genes=names(regulons_genes_tumor), regulons_proteins=names(regulons_proteins))
+upset(fromList(listInput), order.by = "freq")
+
+common <- intersect(names(regulons_genes), names(regulons_proteins))
+common <- gsub (pattern = '_extended', replacement="", common)
+common <- unique(common)
+```
+
+```{r}
+# compute incidence and percentage relative to AUC activity scores
+incidMat <- readr::read_rds('~/Documents/GRNs/TFBS/CBTTC/rnaseq/scenic_matched_proteomics/int/2.6_regulons_asIncidMat.Rds')
+Reg <- incidMat   #TF x genes #incidMat
+R_comb <- combn(rownames(Reg), m=2)  #Create pairwise combinations
+
+# Create required dataframe 
+Reg1 = Reg2  = nR1_genes = nR2_genes = nR1_R2_genes = R1_R2_genes = NULL;
+Regulon_comb <- readRDS('rnaseq/scenic_matched_proteomics/int/Regulon_comb_rsem_matched_proteomics.Rds') 
+#for (comb in 1:ncol(R_comb)) {
+  #two_genes <- print(as.character(gene_comb2[,combo]))
+ 
+#  two_R <- as.character(R_comb[,comb])
+#  R1 <- data.frame(Reg[which(rownames(Reg) == two_R[1]),])
+#  R2 <- data.frame(Reg[which(rownames(Reg) == two_R[2]),])
+#  R1_2 <- cbind(R1, R2)
+#  colnames(R1_2) <- c("R1", "R2")
+#  nR1_2 <- length(which(R1_2[,1] > 0 & R1_2[,2] > 0))
+#  R1R2_genes <- rownames(R1_2[which(R1_2[,1] > 0 & R1_2[,2] > 0),])
+#  R1R2_genes <- paste(R1R2_genes,collapse=",")
+  #common_Regs <- paste(cat(rownames(samples1_2[which(samples1_2[,1] > 0 & samples1_2[,2] > 0),]), sep = “,”))
+#  Reg1 = c(Reg1, two_R[1])
+#  Reg2 = c(Reg2, two_R[2])
+#  nR1_R2_genes = c(nR1_R2_genes, nR1_2)
+#  nR1_genes = c(nR1_genes, sum(R1_2[,1]))
+#  nR2_genes = c(nR2_genes, sum(R1_2[,2]))
+# R1_R2_genes = c(R1_R2_genes, R1R2_genes[1])
+# }
+# Regulon_comb <- data.frame(cbind(Reg1 ,Reg2 ,nR1_R2_genes, nR1_genes , nR2_genes ,R1_R2_genes))
+# Regulon_comb$R1_R2_genes <- as.character(Regulon_comb$R1_R2_genes)
+# Regulon_comb$R1_R2_genes[Regulon_comb$R1_R2_genes == ""] <- "NA"
+ #saveRDS(Regulon_comb, file = '../data/Regulon_comb_replicate_A.Rds')
+ 
+## Calculate percentage and incidence from the incidence matrix
+# Percentage -> proportion of overlapping genes
+# % = nR1_R2_genes/(nR1_genes + nR2_genes) - nR1_R2_genes
+
+# Incidence -> proportion of genes regulated by the TF pair out of total
+# incidence = (nR1_genes + nR2_genes - nR1_R2_genes)/number_of_genes_in_regulons
+tab <- Regulon_comb
+tab$R1_R2_genes <- NULL
+#tab <- tab[subset(rownames(tab), tab$nR1_R2_genes != 0),]  #Remove TFs that do not have overlapping genes
+# I commented this line because we need to look at regulons that do not have overlapping genes but have correlated activity scores
+#Reg <- readRDS("int/2.6_regulons_asIncidMat.Rds")
+tab <- tab %>% 
+cbind(percentage =(round(  as.numeric(as.character(tab$nR1_R2_genes))   /  ((as.numeric(as.character(tab$nR1_genes))+as.numeric(as.character(tab$nR2_genes))) - as.numeric(as.character(tab$nR1_R2_genes)))  ,3))*100) %>% 
+cbind(incidence = round(((as.numeric(as.character(tab$nR1_genes))+as.numeric(as.character(tab$nR2_genes))) - as.numeric(as.character(tab$nR1_R2_genes))) /ncol(Reg),3))
+
+tab <- tab %>% separate(Reg2, c("Regulon2","suffix2"), sep = "_")
+tab <- tab %>% separate(Reg1, c("Regulon1","suffix1"), sep = "_")
+tab <- tab[subset(rownames(tab), tab$Regulon1 != tab$Regulon2),]
+
+reg1 <- paste(tab$Regulon1, tab$suffix1, sep = "_")
+reg2 <- paste(tab$Regulon2, tab$suffix2, sep = "_")
+#Remove NA
+reg1 <- gsub("_NA","",reg1)
+reg2 <- gsub("_NA","",reg2)
+
+#Repopulate the dataframe
+tab$Regulon1 <- reg1
+tab$Regulon2 <- reg2
+tab$suffix1 <- NULL
+tab$suffix2 <- NULL
+
+# commented this line because we need to look at correlated regulons by activity scores that might have non-overlapping genes
+#Keep TF pairs regulating more than 15% of overlapping genes
+#tab1 <- tab[subset(rownames(tab),tab$percentage > 20),]
+# Calculate correlation between regulons based on activity scores
+# library(AUCell)
+#AUC <- readRDS("int/3.4_regulonAUC.Rds") # Regulons * cells
+#AUC <- getAUC(AUC)
+AUC <- data.frame(assay(auc_proteins))
+colnames(AUC) <- gsub (pattern = 'X', replacement='', colnames(AUC))
+AUC <- cor(t(AUC), method="spearman") # potentially consider MI
+AUC <- data.frame(row=rownames(AUC)[row(AUC)], col=colnames(AUC)[col(AUC)], corr=c(AUC))
+
+AUC <- AUC %>% separate(row, c("Reg1","G1"), sep=" ")
+AUC <- AUC %>% separate(col, c("Reg2","G2"), sep=" ")
+colnames(AUC) [1] <- c('Regulon1')
+colnames(AUC) [3] <- c('Regulon2')
+AUC$G1 <- NULL
+AUC$G2 <- NULL
+
+# check correlation values distribution
+ggplot(AUC, aes(x = corr)) + geom_density()
+ggplot(AUC, aes(x = corr)) + geom_histogram(binwidth = .1)
+
+quantile(AUC$corr)
+
+# filter by corr based on activity score
+# top 10% percentile from each direction
+pos <- AUC[AUC$corr >= 0.972082 , ] 
+neg <- AUC[AUC$corr <= -0.6234659 , ]
+dim(pos); rownames(pos) = NULL
+dim(neg); rownames(neg) = NULL
+
+# generate matrix of highly correlated regulons
+pos  <- pos[!pos$Regulon1 == pos$Regulon2, ]; rownames(pos) = NULL
+neg <- neg[!neg$Regulon1 == neg$Regulon2, ]; rownames(neg) = NULL
+AUC_sig <- rbind (pos, neg); rownames(AUC_sig) = NULL
+
+# dot plot for incidence and % overlap
+# append incidence and percentage to AUC corr values
+dat <- AUC_sig
+rownames(dat) <- paste(dat$Regulon2, dat$Regulon1, sep = "-")  
+rownames(tab) <- paste(tab$Regulon1, tab$Regulon2, sep = "-")
+dat <- tibble ::rownames_to_column (dat, var = 'ID')
+tab <- tibble :: rownames_to_column (tab, var = 'ID')
+# join by ID
+dat <- inner_join(tab, dat, by = 'ID')
+# fct_rev to get lower triangular plot
+library (forcats)
+dat$Regulon2.y = forcats::fct_rev(factor(dat$Regulon2.y))
+
+# draw the dotplot
+dotplot <- ggplot2::ggplot(data = dat, mapping =  ggplot2::aes(x = Regulon1.y, y = Regulon2.y)) + 
+  #ggplot2::geom_point(mapping = ggplot2::aes(color = corr, size = ifelse(percentage==0.00, NA, percentage))) + 
+  ggplot2::geom_point(mapping = ggplot2::aes(color = corr, size = percentage)) + 
+  ggplot2::theme(axis.text.x.bottom = ggplot2::element_text(angle = 90, vjust = 0, hjust = 1, size = 4)) +
+  ggplot2::theme(axis.text.y = ggplot2::element_text(size = 4)) +
+  ggplot2::ggtitle("correlated regulons") + ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5)) +
+  ggplot2::scale_x_discrete(position = "bottom") + ggplot2::labs(size = 'percentage of overalapping genes', color = 'correlation between regulons activity scores')
+
+# plot the network
+sub = NULL; sub = dat[dat$Regulon1.x %in% AUC_sig$Regulon1 & dat$Regulon2.x %in% AUC_sig$Regulon2, ]
+REG1 <- data.frame(Regulon1 = sub$Regulon1.x, n_genes = sub$nR1_genes)
+REG1 <- unique(REG1)
+REG2 <- data.frame(Regulon1 = sub$Regulon2.x, n_genes = sub$nR2_genes)
+REG2 <- unique(REG2)
+nodes <- unique(rbind(REG1,REG2))  #Assign TF as nodes
+rownames(nodes) <- NULL
+names(nodes) <- c("Regulons","n_genes")
+links <- data.frame(Regulon1 = sub$Regulon1.x, Regulon2 = sub$Regulon2.x, percentage = sub$percentage, corr = sub$corr) #Info on nodes and edges
+net <- graph.data.frame(d = links, vertices = nodes, directed = F)
+centrality = eigen_centrality(net)$vector  #Measure centrality
+centrality <- data.frame(centrality)
+#leastcentral <- subset(rownames(centrality), centrality$centrality < (fivenum(centrality$centrality)[3]))  
+# remove nodes with less than 25% of centrality values
+leastcentral <- subset(rownames(centrality), centrality$centrality < (quantile(centrality$centrality)[2]))
+net <- delete_vertices(net, leastcentral) #Remove nodes with least centrality
+
+#Graph attributes
+# nodes
+colrs <- c("gray50", "tomato", "gold")
+#Compute node degrees (#links) and use that to set node size:
+#deg <- degree(net, mode="all")
+#V(net)$size <- deg/3
+V(net)$size <- as.numeric(V(net)$n_genes)*0.01
+#V(net)$label.color <- "black"
+#E(net)$width <-  rescale(E(net)$corr, to = c(0.5,2.5))
+#E(net)$width <-  rescale(E(net)$corr, to = c(0,2))
+#E(net)$edge.color <- c("slategrey", "dark red")[(E(net)$corr < 0)+1]
+#E(net)$edge.color <- c("slategrey", "dark red")[(E(net)$corr < 0)*-1]
+#col1 <- adjustcolor( "blue", alpha.f = 0.3) # +ve correlation
+#col2 <- adjustcolor( "red", alpha.f = 0.3)  # -ve correlation
+#E(net)$edge.color <- c(col1, col2)[(E(net)$corr < 0)]
+#E(net)$edge.color <- c(col1, col2)
+# edges
+E(net)$edge.width <- abs(E(net)$corr)
+E(net)$color <- ifelse(E(net)$corr > 0, "blue","red")
+
+#Plot
+plot(net,vertex.label.cex = 0.5,vertex.color = "orange", edge.color = E(net)$edge.color,edge.width = E(net)$width, vertex.size = V(net)$size, vertex.label.font = 2, vertex.label.dist = 0.8, layout = layout_with_graphopt)
+
+# cluster the networks
+# https://cran.r-project.org/web/packages/leiden/vignettes/run_leiden.html
+# leiden
+adjacency_matrix <- igraph::as_adjacency_matrix(net, edges = TRUE)
+# run the leiden algorithm on the adjacency matrix
+partition <- leiden(adjacency_matrix, resolution_parameter = 1, node_sizes = V(net)$size, weights = NULL)
+table(partition)
+
+# visualise
+node.cols <- brewer.pal(max(c(4, partition)),"Set3")[partition]
+#node.cols <- rainbow(5, alpha=.5)
+#node.cols <- brewer.pal(4, "Set3")
+plot(net, vertex.color = node.cols, edge.color = E(net)$edge.color, , vertex.label.cex = 0.5)
+plot(net, layout=layout_with_fr, vertex.color = node.cols, edge.color = E(net)$edge.color, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.width = E(net)$edge.width/8)
+
+plot(net, layout=layout_with_kk, vertex.color = node.cols, edge.color = E(net)$edge.color, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.width = E(net)$edge.width/8)
+
+plot(net, layout=layout_with_mds, vertex.color = node.cols, edge.color = E(net)$edge.color, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.width = E(net)$edge.width/8)
+
+plot(net, layout=layout_with_lgl, vertex.color = node.cols, edge.color = E(net)$edge.color, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.width = E(net)$edge.width/8)
+
+# community detection based on label propagation
+clp <- cluster_label_prop(net)
+class(clp)
+
+# louvain 
+# https://igraph.org/r/doc/cluster_louvain.html
+communities <- cluster_louvain (net, weights = E(net)$edge.width)
+membership(communities)
+modularity(communities)
+
+plot(communities, net, layout=layout_with_fr, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.color = E(net)$edge.color, edge.width = E(net)$edge.width/8, vertex.color = node.cols)
+
+plot(communities, net, layout=layout_with_kk, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.color = E(net)$edge.color, edge.width = E(net)$edge.width/8)
+
+plot(communities, net, layout=layout_with_mds, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.color = E(net)$edge.color, edge.width = E(net)$edge.width/8)
+
+plot(communities, net, layout=layout_with_lgl, vertex.label.dist=1, vertex.size=V(net)$size, vertex.label.cex = 0.5, edge.color = E(net)$edge.color, edge.width = E(net)$edge.width/8)
+```
+```{r}
+# extract targets of regulosn/louvain community
+community_1_genes <- membership(communities)[membership(communities) == 1]
+community_2_genes <- membership(communities)[membership(communities) == 2]
+community_3_genes <- membership(communities)[membership(communities) == 3]
+
+community_1_targets_genes <- regulons_genes[names(regulons_genes) %in% names(community_1_genes)]; community_1_targets_genes = unlist (community_1_targets_genes)
+
+community_2_targets_genes <- regulons_genes[names(regulons_genes) %in% names(community_2_genes)]; community_2_targets_genes = unlist (community_2_targets_genes)
+
+community_3_targets_genes <- regulons_genes[names(regulons_genes) %in% names(community_3_genes)]; community_3_targets_genes = unlist (community_3_targets_genes)
+
+
+library (UpSetR)
+listInput <- list (community_1 = community_1_targets_genes, community_2 = community_2_targets_genes, community_3 = community_3_targets_genes)
+upset(fromList(listInput), order.by = "freq")
+
+common <- intersect(community_1_targets_genes, community_2_targets_genes)
+common <- intersect(common, community_3_targets_genes)
+tmp23 <- intersect(community_2_targets_genes, community_3_targets_genes); tmp23 <- tmp23[!tmp23 %in% common]
+tmp12 <- intersect(community_1_targets_genes, community_2_targets_genes); tmp12 <- tmp12[!tmp12 %in% common]
+tmp13 <- intersect(community_1_targets_genes, community_3_targets_genes); tmp13 <- tmp13[!tmp13 %in% common]
+
+community_3_targets_genes <- community_3_targets_genes[!community_3_targets_genes %in% common]
+
+community_3_targets_genes <- community_3_targets_genes[!community_3_targets_genes %in% tmp12]
+
+write.table (community_3_targets_genes, file = 'rnaseq/community_3_target_genes', sep = '\t', quote = FALSE, row.names = FALSE, col.names = FALSE)
+```
+```{r}
+library (UpSetR)
+listInput <- list (genes= regulons_genes$BCLAF1_extended, proteins = regulons_proteins$BCLAF1_extended)
+upset(fromList(listInput), order.by = "freq")
+
+```
+```{r}
+# normal developing brain RPKM
+# from http://development.psychencode.org/#
+dat <- NULL; 
+dat <- read_tsv('psychENCODE/mRNA-seq_hg38.gencode21.wholeGene.geneComposite.STAR.nochrM.gene.RPKM.normalized.CQNCombat.txt')
+
+# colnames refer temporal.spatial IDs
+# convert rownames to gene symbols and summarise by mean for input to SCENIC
+df <- dat; 
+df$Geneid <- sapply (strsplit(df$Geneid, '\\|' ), function(x) paste(x[2]) )
+df <- df %>%
+  group_by(Geneid) %>%
+  summarise_all(mean) %>%
+  column_to_rownames(var = 'Geneid')
+
+annotation_psychENCODE <- read_tsv('psychENCODE/mRNA-seq_Sample metadata.txt')
+```
+
+```{r}
+# scenic -- genes -- pychENCODE
+# import scenic ouput (auc activity scores and regulon-gene sets)
+auc_genes_normal = readRDS('~/Documents/GRNs/TFBS/CBTTC/psychENCODE/3.4_regulonAUC.Rds')
+regulons_genes_normal = readRDS('~/Documents/GRNs/TFBS/CBTTC/psychENCODE/2.6_regulons_asGeneSet.Rds')
+# check expression of regulons across cell lines, tumor and xenografts
+# heatmap
+dat = data.frame(assay(auc_genes_normal))
+dat = na.omit(t(scale(t(as.matrix(dat)), center = T, scale=T)))
+colnames(dat) <- sapply(strsplit(colnames(dat), split='\\.'), function(x) x[[1]])
+# generate plots using the extended regulons
+#dat <- dat[grep (rownames(dat), pattern = '_extended'), ]
+
+annotation_file <- annotation_psychENCODE %>%
+  dplyr::select('Braincode', 'Hemisphere', 'Age', 'Sex', 'Ethnicity', 'Days') %>%
+  column_to_rownames(var= 'Braincode')
+
+pdf ('~/Documents/GRNs/TFBS/CBTTC/plots/psychENCODE_regulons_genes_heatmap.pdf', width = 30, height = 18)
+pheatmap::pheatmap(dat, fontsize_row=3, color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = annotation_file, clustering_method = "ward.D2", fontsize_col = 3, show_rownames = FALSE)
+dev.off()
+```
+
+

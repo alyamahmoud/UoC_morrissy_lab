@@ -1,0 +1,1025 @@
+---
+title: "Running SCENIC"
+subtitle: SCENIC (Single Cell rEgulatory Network Inference and Clustering)
+output:
+  html_document:
+    number_sections: no
+    toc: yes
+    toc_float: yes
+    css: corrected.css
+    results: hold
+  html_notebook:
+    toc: yes
+  pdf_document:
+    toc: yes
+bibliography: references.bib
+vignette: >
+  %\VignetteIndexEntry{Running SCENIC} 
+  %\VignetteEngine{knitr::rmarkdown} 
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+# Suppress loading messages when building the HTML
+# devtools::install_github("aertslab/SCENIC@v1.1.1") 
+rm (list = ls())
+suppressPackageStartupMessages({
+  library (data.table)
+  library(SCENIC)
+  library(AUCell)
+  library(RcisTarget)
+  library(SCopeLoomR)
+  library(Seurat)
+  library (dplyr)
+  library (ggplot2)
+  library (devtools)
+  library (igraph)
+  library (clusterProfiler)
+  library(dplyr)
+library(tidyr)
+library(stringr)
+library(igraph)
+library(scales)
+
+})
+options(width=200)
+# To build a personalized report, update this working directory:
+knitr::opts_knit$set(root.dir="/Users/mohameam/Documents/GBM_Charbonneau/GRNs/") 
+```
+
+```{r}
+### Initialize settings
+scenicOptions <- readRDS('int/scenicOptions.Rds')
+cellInfo <- readRDS('int/cellInfo.Rds')
+org="mgi" # or hgnc, or dmel
+dbDir="/Users/mohameam/Documents/GBM_Charbonneau/GRNs/db_dir/" # RcisTarget databases location
+myDatasetTitle="SCENIC example on Mouse brain" # choose a name for your analysis
+data(defaultDbNames)
+dbs <- defaultDbNames[[org]]
+scenicOptions <- initializeScenic(org=org, dbDir=dbDir, dbs=dbs, datasetTitle=myDatasetTitle, nCores=10)
+```
+
+```{r}
+# annotation by cell assign
+#cell_assign <- read.csv ('../cell_assign_sce_frame.csv'); cell_assign <- cell_assign[, -1]
+#cell_assign_gawad_lab <- read.csv('../cell_assign_gawad_lab_markers_sce_frame.csv'); cell_assign_gawad_lab <- cell_assign_gawad_lab[, -1]; colnames(cell_assign_gawad_lab) = c('barcode', 'cell_type_gawad_markers')
+#cellInfo <- rownames_to_column(cellInfo, var = 'barcode')
+#cellInfo <- inner_join(cellInfo, cell_assign_gawad_lab, by = 'barcode')
+#cellInfo <- inner_join (cellInfo, cell_assign, by = 'barcode')
+#cellInfo <- column_to_rownames(cellInfo, var = 'barcode')
+#saveRDS(cellInfo, 'int/cellInfo.Rds')
+```
+
+## Clustering / dimensionality reduction on the regulon activity
+
+The cells can be grouped/clustered based on the regulon activity, either continuous or binarized (*See the section below "Exploring > Cell states" for details*). 
+
+If using t-SNE as visualization, it is recommended to try different settings to evaluate the stability of the states/clusters. Feel free to use UMAP, other clustering methods (or trajectory inference methods, if appropriate) instead.
+
+The function included in SCENIC package runs multiple t-SNEs with different settings; It will create all combinations between the selected "number of PCs" and "perplexity" (expected *running time*: few minutes to hours, depending on the number of cells):
+```{r}
+#nPcs <- c(5) # For toy dataset
+nPcs <- c(5,15,50)
+```
+
+```{r altTsnes, eval=FALSE}
+scenicOptions@settings$seed <- 123 # same seed for all of them
+# Run t-SNE with different settings:
+fileNames <- tsneAUC(scenicOptions, aucType="AUC", nPcs=nPcs, perpl=c(5,15,50))
+fileNames <- tsneAUC(scenicOptions, aucType="AUC", nPcs=nPcs, perpl=c(5,15,50), onlyHighConf=TRUE, filePrefix="int/tSNE_oHC")
+# Plot as pdf (individual files in int/):
+fileNames <- paste0("int/",grep(".Rds", grep("tSNE_", list.files("int"), value=T), value=T))
+par(mfrow=c(length(nPcs), 3))
+fileNames <- paste0("int/",grep(".Rds", grep("tSNE_AUC", list.files("int"), value=T, perl = T), value=T))
+plotTsne_compareSettings(fileNames, scenicOptions, showLegend=FALSE, varName="cell_type_gawad_markers", cex=.5)
+
+# Using only "high-confidence" regulons (normally similar)
+par(mfrow=c(3,3))
+fileNames <- paste0("int/",grep(".Rds", grep("tSNE_oHC_AUC", list.files("int"), value=T, perl = T), value=T))
+plotTsne_compareSettings(fileNames, scenicOptions, showLegend=FALSE, varName="cell_type_gawad_markers", cex=.5)
+
+table(cellInfo$seurat_clusters)
+table(cellInfo$cell_type)
+table(cellInfo$cell_type_gawad_markers)
+```
+
+according to Gawad lab: they used Hes5 to indicate progenitor cells, Slc1a3 to mark astrocytes [34], Pax6 to mark GNPs and/or granule neurons [35], Meis2 to identify glutamatergic CNs [36], Lhx5 to identify GABAergic progenitors [36], Calb1 to mark PCs [37], and Pax2 to indicate GABAergic interneurons [38].
+
+Cic is a TF downstream of RTK signaling, leading to repression of its targets. RTK signaling relieves this repression permitting transcription of targets like: PEA3/ETS transcription factors ETV1/4/5
+
+```{r}
+exprMat <- readRDS('exprMat_filtered.Rds')
+logMat <- exprMat # Better if it is logged/normalized
+aucellApp <- plotTsne_AUCellApp(scenicOptions, logMat) # default t-SNE
+savedSelections <- shiny::runApp(aucellApp)
+```
+
+
+```{r checkMissingGenes}
+marker_genes <- list (progenitor = c('Hes5'), astrocytes = c('Slc1a3'), GNPs = c('Pax6'), granule_neurons = c('Pax6'), glutamatergic_CNs = c('Meis2'), GABAergic_progenitors = c('Lhx5'), PCs = c('Calb1'), GABAergic_interneurons = c('Pax2'))
+```
+
+```{r}
+# GRN: Regulon targets and motifs
+# Genes included in the regulons
+regulons_geneTargets <- readRDS('int/2.6_regulons_asGeneSet.Rds')
+length (regulons_geneTargets)
+# Note than only regulons with 10 genes or more are scored with AUCell
+regulonAUC <- readRDS ('int/3.4_regulonAUC.Rds')
+head(cbind(onlyNonDuplicatedExtended(names(regulons_geneTargets))))
+dim(regulonAUC)
+# details about the Tf-target link 
+regulonTargetInfo <- readRDS ('int/2.5_regulonTargetsInfo.Rds') # available in the html file in the output as well
+
+# create non-normalized regulon scoring matrix
+# use non-normalized Actoivity scores
+genesets <- readRDS ('int/3.1_regulons_forAUCell.Rds')
+rankings <- readRDS('int/3.3_aucellRankings.Rds')
+
+# default setting as per github version which I am using on arc
+#regulonAUC_non_normalized <- AUCell_calcAUC(genesets, rankings, aucMaxRank=rankings@nGenesDetected["1%"], normAUC = FALSE)
+
+# trying other defaults
+regulonAUC_non_normalized <- AUCell_calcAUC(genesets, rankings, aucMaxRank=20, normAUC = FALSE)
+saveRDS(regulonAUC_non_normalized, file = 'regulonAUC_non_normalized.Rds')
+```
+
+```{r}
+### using non-normalized regulon activity scores
+brain.data <- readRDS ('brain.data.e13A.Rds')
+cellInfo <- rownames_to_column(cellInfo, var = 'barcode')
+# average regulon activity by cell cluster
+regulonAUC <- regulonAUC_non_normalized[onlyNonDuplicatedExtended(rownames(regulonAUC_non_normalized)),]
+regulonActivity_byCellCluster <- sapply(split(cellInfo$barcode, cellInfo$seurat_clusters), function(cells) rowMeans(getAUC(regulonAUC)[,cells]))
+regulonActivity_byCellCluster_Scaled <- na.omit(t(scale(t(regulonActivity_byCellCluster), center = T, scale=T)))
+
+pheatmap::pheatmap(regulonActivity_byCellCluster_Scaled, fontsize_row=3,
+                   color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),
+                   treeheight_row=10, treeheight_col=10, border_color=NA)
+
+saveRDS(regulonActivity_byCellCluster, file = 'e13A_non_normalized_regulonActivity_byCellCluster.Rds')
+
+
+# average regulon activity by cell type based on gawad marker
+# discard cell types of less than 2 
+#cellInfo <- cellInfo[!cellInfo$barcode == 'GCGGAGCTTTGGTG-3', ]
+#cellInfo <- cellInfo[!cellInfo$barcode == 'AGGCCTCTCTTAGG-3', ]
+#regulonAUC <- regulonAUC_non_normalized[, !colnames(regulonAUC_non_normalized) == 'GCGGAGCTTTGGTG-3']
+#regulonAUC <- regulonAUC[, !colnames(regulonAUC) == 'AGGCCTCTCTTAGG-3']
+regulonActivity_byCellType <- sapply(split(cellInfo$barcode, cellInfo$cell_type_gawad_markers), function(cells) rowMeans(getAUC(regulonAUC)[,cells]))
+regulonActivity_byCellType_Scaled <- na.omit(t(scale(t(regulonActivity_byCellType), center = T, scale=T)))
+
+pheatmap::pheatmap(regulonActivity_byCellType_Scaled, fontsize_row=3, 
+                   color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),
+                   treeheight_row=10, treeheight_col=10, border_color=NA)
+
+
+saveRDS(regulonActivity_byCellType, file = 'e13A_non_normalized_regulonActivity_byCellType_Gawad_Markers.Rds')
+
+# average regulon activity by cell type based on Maria's marker list
+# discard cell types of less than 2 
+cellInfo <- cellInfo[!cellInfo$barcode == 'CTTACTGACTTGCC-6', ]
+cellInfo <- cellInfo[!cellInfo$barcode == 'TAGATTGAAGGGTG-6', ]
+cellInfo <- cellInfo[!cellInfo$barcode == 'TCCGAAGAGACGTT-6', ]
+cellInfo <- cellInfo[!cellInfo$barcode == 'ACGGAACTATTCTC-6', ]
+
+regulonAUC <- regulonAUC_non_normalized[, !colnames(regulonAUC_non_normalized) == 'CTTACTGACTTGCC-6']
+regulonAUC <- regulonAUC[, !colnames(regulonAUC) == 'TAGATTGAAGGGTG-6']
+regulonAUC <- regulonAUC[, !colnames(regulonAUC) == 'TCCGAAGAGACGTT-6']
+regulonAUC <- regulonAUC[, !colnames(regulonAUC) == 'ACGGAACTATTCTC-6']
+
+regulonActivity_byCellType <- sapply(split(cellInfo$barcode, cellInfo$cell_type), function(cells) rowMeans(getAUC(regulonAUC)[,cells]))
+regulonActivity_byCellType_Scaled <- na.omit(t(scale(t(regulonActivity_byCellType), center = T, scale=T)))
+
+pheatmap::pheatmap(regulonActivity_byCellType_Scaled, fontsize_row=3, 
+                   color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),
+                   treeheight_row=10, treeheight_col=10, border_color=NA)
+
+
+saveRDS(regulonActivity_byCellType, file = 'e13A_non_normalized_regulonActivity_byCellType_Maria_Markers.Rds')
+
+```
+
+
+```{r}
+#### using normalized regulon activity scores
+# average regulon activity by cluster 
+# by seurat cluster
+brain.data <- readRDS ('brain.data.P10A.Rds')
+# TO DO 
+# check if seurat clusters UMAP vs tSNE
+# cellInfo <- data.frame(seuratCluster=Idents(brain.data.e10A)) 
+cellInfo <- rownames_to_column(cellInfo, var = 'barcode')
+
+# average regulon activity by cell cluster
+regulonAUC <- regulonAUC[onlyNonDuplicatedExtended(rownames(regulonAUC)),]
+regulonActivity_byCellCluster <- sapply(split(cellInfo$barcode, cellInfo$seurat_clusters), function(cells) rowMeans(getAUC(regulonAUC)[,cells]))
+regulonActivity_byCellCluster_Scaled <- t(scale(t(regulonActivity_byCellCluster), center = T, scale=T))
+
+pheatmap::pheatmap(regulonActivity_byCellCluster_Scaled, fontsize_row=3, 
+                   color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),
+                   treeheight_row=10, treeheight_col=10, border_color=NA)
+
+saveRDS(regulonActivity_byCellCluster, file = 'P10A_regulonActivity_byCellCluster.Rds')
+
+# average regulon activity by cell type based on gawad marker
+# discard cell types of less than 2 
+cellInfo <- cellInfo[!cellInfo$barcode == 'AAACATTGGGTGAG-22', ]
+#cellInfo <- cellInfo[!cellInfo$barcode == 'AGGCCTCTCTTAGG-3', ]
+regulonAUC <- regulonAUC[, !colnames(regulonAUC) == 'AAACATTGGGTGAG-22']
+#regulonAUC <- regulonAUC[, !colnames(regulonAUC) == 'AGGCCTCTCTTAGG-3']
+regulonActivity_byCellType <- sapply(split(cellInfo$barcode, cellInfo$cell_type_gawad_markers), function(cells) rowMeans(getAUC(regulonAUC)[,cells]))
+regulonActivity_byCellType_Scaled <- t(scale(t(regulonActivity_byCellType), center = T, scale=T))
+
+pheatmap::pheatmap(regulonActivity_byCellType_Scaled, fontsize_row=3, 
+                   color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),
+                   treeheight_row=10, treeheight_col=10, border_color=NA)
+
+
+saveRDS(regulonActivity_byCellType, file = 'P10A_regulonActivity_byCellType_Gawad_Markers.Rds')
+
+# average regulon activity by cell type based Maria's marker list
+# discard cell types of less than 2 
+#cellInfo <- cellInfo[!cellInfo$barcode == 'AAACATTGGGTGAG-22', ]
+#cellInfo <- cellInfo[!cellInfo$barcode == 'AGGCCTCTCTTAGG-3', ]
+#regulonAUC <- regulonAUC[, !colnames(regulonAUC) == 'AAACATTGGGTGAG-22']
+#regulonAUC <- regulonAUC[, !colnames(regulonAUC) == 'AGGCCTCTCTTAGG-3']
+regulonActivity_byCellType <- sapply(split(cellInfo$barcode, cellInfo$cell_type_gawad_markers), function(cells) rowMeans(getAUC(regulonAUC)[,cells]))
+regulonActivity_byCellType_Scaled <- t(scale(t(regulonActivity_byCellType), center = T, scale=T))
+
+pheatmap::pheatmap(regulonActivity_byCellType_Scaled, fontsize_row=3, 
+                   color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),
+                   treeheight_row=10, treeheight_col=10, border_color=NA)
+
+
+saveRDS(regulonActivity_byCellType, file = 'P10A_regulonActivity_byCellType_Gawad_Markers.Rds')
+
+```
+
+```{r}
+# visulaise regulon AUC activity scores for regulators of marker genes
+dat <- regulonTargetInfo[regulonTargetInfo$gene == 'Slc1a3', ]
+int_TF <- unique(dat$TF)
+
+int_regulonActivity_byCellType_Scaled <- data.frame (regulonActivity_byCellType_Scaled)
+int_regulonActivity_byCellType_Scaled <- rownames_to_column(int_regulonActivity_byCellType_Scaled, "TF")
+rownames(int_regulonActivity_byCellType_Scaled) <- sapply (strsplit(int_regulonActivity_byCellType_Scaled$TF, "_"), function (x) paste (x[1]))
+rownames(int_regulonActivity_byCellType_Scaled) <- sapply (strsplit(rownames(int_regulonActivity_byCellType_Scaled), " "), function (x) paste (x[1]))
+
+int_regulonActivity <- int_regulonActivity_byCellType_Scaled[rownames(int_regulonActivity_byCellType_Scaled) %in% int_TF, ]
+int_regulonActivity <- int_regulonActivity[, -1]
+int_regulonActivity <- data.frame (int_regulonActivity, stringsAsFactors = FALSE)
+
+#pdf ('../../e16A/output/Slc1a3_RegulonActivity.pdf')
+pheatmap::pheatmap(as.matrix(int_regulonActivity), fontsize_row=6, 
+                   color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),
+                   treeheight_row=10, treeheight_col=10, border_color=NA)
+
+# save TF for gene of interest
+tf_Slc1a3 <- rownames(int_regulonActivity)
+length (tf_Slc1a3)
+```
+
+```{r}
+# regulon activity score analysis across developmental time points
+setwd('/Users/mohameam/Documents/GBM_Charbonneau/GRNs/')
+
+# read data by cell type using markers by Gawad lab
+e10A <- readRDS ('e10A/e10A_regulonActivity_byCellType_Gawad_Markers.Rds')
+e11A <- readRDS('e11A/e11A_regulonActivity_byCellType_Gawad_Markers.Rds')
+e12A <- readRDS('e12A/e12A_regulonActivity_byCellType_Gawad_Markers.Rds')
+e13A <- readRDS('e13A/e13A_regulonActivity_byCellType_Gawad_Markers.Rds')
+e14A <- readRDS('e14A/e14A_regulonActivity_byCellType_Gawad_Markers.Rds')
+e15A <- readRDS('e15A/e15A_regulonActivity_byCellType_Gawad_Markers.Rds')
+e16A <- readRDS('e16A/e16A_regulonActivity_byCellType_Gawad_Markers.Rds')
+e17A <- readRDS('e17A/e17A_regulonActivity_byCellType_Gawad_Markers.Rds')
+P0OA <- readRDS('P00A/P0OA_regulonActivity_byCellType_Gawad_Markers.Rds')
+P04A <- readRDS('P04A/P04A_regulonActivity_byCellType_Gawad_Markers.Rds')
+P07A <- readRDS('P07A/P07A_regulonActivity_byCellType_Gawad_Markers.Rds')
+P10A <- readRDS('P10A/P10A_regulonActivity_byCellType_Gawad_Markers.Rds')
+
+# data cleaning to merge all timpoints into one dataframe 
+rownames(e10A) <- sapply (strsplit(rownames(e10A), " "), function (x) paste (x[1]))
+rownames(e11A) <- sapply (strsplit(rownames(e11A), " "), function (x) paste (x[1]))
+rownames(e12A) <- sapply (strsplit(rownames(e12A), " "), function (x) paste (x[1]))
+rownames(e13A) <- sapply (strsplit(rownames(e13A), " "), function (x) paste (x[1]))
+rownames(e14A) <- sapply (strsplit(rownames(e14A), " "), function (x) paste (x[1]))
+rownames(e15A) <- sapply (strsplit(rownames(e15A), " "), function (x) paste (x[1]))
+rownames(e16A) <- sapply (strsplit(rownames(e16A), " "), function (x) paste (x[1]))
+rownames(e17A) <- sapply (strsplit(rownames(e17A), " "), function (x) paste (x[1]))
+rownames(P0OA) <- sapply (strsplit(rownames(P0OA), " "), function (x) paste (x[1]))
+rownames(P04A) <- sapply (strsplit(rownames(P04A), " "), function (x) paste (x[1]))
+rownames(P07A) <- sapply (strsplit(rownames(P07A), " "), function (x) paste (x[1]))
+rownames(P10A) <- sapply (strsplit(rownames(P10A), " "), function (x) paste (x[1]))
+
+# rename colnames to indicate time point and seurat cluster
+# TO DO: use UMAP clusters from seurat 
+colnames(e10A) <- paste ("e10A", colnames(e10A), sep = '_')
+colnames(e11A) <- paste ("e11A", colnames(e11A), sep = '_')
+colnames(e12A) <- paste ("e12A", colnames(e12A), sep = '_')
+colnames(e13A) <- paste ("e13A", colnames(e13A), sep = '_')
+colnames(e14A) <- paste ("e14A", colnames(e14A), sep = '_')
+colnames(e15A) <- paste ("e15A", colnames(e15A), sep = '_')
+colnames(e16A) <- paste ("e16A", colnames(e16A), sep = '_')
+colnames(e17A) <- paste ("e17A", colnames(e17A), sep = '_')
+colnames(P0OA) <- paste ("P0OA", colnames(P0OA), sep = '_')
+colnames(P04A) <- paste ("P04A", colnames(P04A), sep = '_')
+colnames(P07A) <- paste ("P07A", colnames(P07A), sep = '_')
+colnames(P10A) <- paste ("P10A", colnames(P10A), sep = '_')
+
+e10A <- tibble::rownames_to_column(data.frame (e10A), var = 'Regulons')
+e11A <- tibble::rownames_to_column(data.frame (e11A), var = 'Regulons')
+e12A <- tibble::rownames_to_column(data.frame (e12A), var = 'Regulons')
+e13A <- tibble::rownames_to_column(data.frame (e13A), var = 'Regulons')
+e14A <- tibble::rownames_to_column(data.frame (e14A), var = 'Regulons')
+e15A <- tibble::rownames_to_column(data.frame (e15A), var = 'Regulons')
+e16A <- tibble::rownames_to_column(data.frame (e16A), var = 'Regulons')
+e17A <- tibble::rownames_to_column(data.frame (e17A), var = 'Regulons')
+P0OA <- tibble::rownames_to_column(data.frame (P0OA), var = 'Regulons')
+P04A <- tibble::rownames_to_column(data.frame (P04A), var = 'Regulons')
+P07A <- tibble::rownames_to_column(data.frame (P07A), var = 'Regulons')
+P10A <- tibble::rownames_to_column(data.frame (P10A), var = 'Regulons')
+
+# join all time points keeping union of regulons, missing regulons are indicated by NA
+regulonActivity_byTimePoint <- full_join(e10A, e11A, by = 'Regulons')
+regulonActivity_byTimePoint <- full_join(regulonActivity_byTimePoint, e12A, by = 'Regulons')
+regulonActivity_byTimePoint <- full_join(regulonActivity_byTimePoint, e13A, by = 'Regulons')
+regulonActivity_byTimePoint <- full_join(regulonActivity_byTimePoint, e14A, by = 'Regulons')
+regulonActivity_byTimePoint <- full_join(regulonActivity_byTimePoint, e15A, by = 'Regulons')
+regulonActivity_byTimePoint <- full_join(regulonActivity_byTimePoint, e16A, by = 'Regulons')
+regulonActivity_byTimePoint <- full_join(regulonActivity_byTimePoint, e17A, by = 'Regulons')
+regulonActivity_byTimePoint <- full_join(regulonActivity_byTimePoint, P0OA, by = 'Regulons')
+regulonActivity_byTimePoint <- full_join(regulonActivity_byTimePoint, P04A, by = 'Regulons')
+regulonActivity_byTimePoint <- full_join(regulonActivity_byTimePoint, P07A, by = 'Regulons')
+regulonActivity_byTimePoint <- full_join(regulonActivity_byTimePoint, P10A, by = 'Regulons')
+
+# replace NA by zero
+regulonActivity_byTimePoint[is.na (regulonActivity_byTimePoint)] <- 0 
+
+# dim(regulonActivity_byTimePoint)
+# 790 153
+
+# visualise
+library (tibble)
+regulonActivity_byTimePoint <- column_to_rownames(regulonActivity_byTimePoint, var = 'Regulons')
+regulonActivity_byTimePoint_Scaled <- na.omit(t(scale(t(regulonActivity_byTimePoint), center = T, scale=T)))
+
+# heatmap annotation 
+annotation <- sapply (strsplit (colnames(regulonActivity_byTimePoint), "_"), function (x) paste (x[1]))
+annotation <- data.frame (annotation)
+rownames(annotation) <- colnames(regulonActivity_byTimePoint)
+cell_type <- sapply (strsplit (rownames(annotation), "_"), function (x) paste (x[2]))
+annotation <- cbind (annotation, cell_type)
+
+pheatmap::pheatmap(regulonActivity_byTimePoint_Scaled, fontsize_row=2, fontsize_col = 4,  
+                   color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100), annotation= annotation, treeheight_row=10, treeheight_col=10, border_color=NA)
+
+```
+
+```{r}
+# batch correction
+# http://web.mit.edu/~r/current/arch/i386_linux26/lib/R/library/limma/html/removeBatchEffect.html
+library (limma)
+mat <- regulonActivity_byTimePoint; mat_scaled <- na.omit(t(scale(t(mat), center = T, scale=T)))
+batch <- annotation$annotation
+y <- removeBatchEffect(mat, batch); y_scaled <- na.omit(t(scale(t(y), center = T, scale=T)))
+
+pdf ('test.pdf', width = 12, height = 15)
+pheatmap::pheatmap(mat_scaled, fontsize_row=2, fontsize_col = 4,  
+                   color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100), annotation= annotation, treeheight_row=10, treeheight_col=10, border_color=NA)
+
+pheatmap::pheatmap(y_scaled, fontsize_row=2, fontsize_col = 4,  
+                   color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100), annotation= annotation, treeheight_row=10, treeheight_col=10, border_color=NA)
+dev.off()
+
+boxplot(as.data.frame(y),main="Original")
+boxplot(as.data.frame(y2),main="Batch corrected")
+
+```
+
+
+```{r}
+# NMF 
+# estimate number of ranks
+seed = 123456; 
+regulonActivity_byTimePoint <- as.matrix (regulonActivity_byTimePoint)
+# run at multiple ranks and choose the one at which the cophenetic value starts to decrease
+# Estimation of the rank: Consensus matrices computed from 10 runs for each value of r
+estim.r <- nmf (regulonActivity_byTimePoint, 2:10, nrun = 10, seed = seed)
+pdf ('RegulonActivity_byTimePoint_nmf_single_method_over_range_of_ranks.pdf', width = 20, height = 18)
+plot(estim.r)
+consensusmap (estim.r, annCol = annotation)
+dev.off()
+
+# single ranke over range of methods
+estim.r <- nmf (regulonActivity_byTimePoint, 8, list ('lee', 'brunet', 'nsNMF'), nrun = 10, seed = 123456)
+pdf ('RegulonActivity_byTimePoint_nmf_single_ranke_over_range_of_methods.pdf', width = 15, height = 16)
+consensusmap (estim.r, annCol = annotation)
+dev.off()
+
+# randomize the data and recompute the rank
+# shuffle the original data
+V.random <- randomize (regulonActivity_byTimePoint)
+# estimate quality measures from the shuffled data using default nmf algorithm
+estim.r.random <- nmf (V.random, 2:10, nrun = 10, seed = 123456)
+# plot measures on the same graph
+pdf ('RegulonActivity_byTimePoint_nmf_single_method_over_range_of_ranks_randomized.pdf', width= 20, height = 18)
+plot (estim.r, estim.r.random)
+dev.off()
+```
+
+```{r}
+# nmf results
+seed= 123456
+res <- nmf(regulonActivity_byTimePoint, 8, seed = seed)
+
+# visualise nmf results
+annotation <- rownames_to_column(annotation, var = 'TimePoint')
+pdf ('RegulonActivity_byTimePoint_nmf_coefficient_matrix.pdf')
+coefmap(res, annCol=list (TimePoints = annotation$annotation)) 
+basismap (res, annRow=list(basis=':basis'))
+dev.off()
+# retrieve the fitted model
+fit(res)
+#<Object of class:NMFstd>
+#features: 790 
+#basis/rank: 8 
+#samples: 152
+# quality measures
+summary (res, class = as.factor(annotation$annotation))
+
+# nmf matrices are sparse, metagenes can be characterized by a small group of genes
+# those are determined based on their relative contribution to each metagene
+feature_scores <- featureScore(res, method = 'kim')
+summary (feature_scores)
+
+# plot distribution of regulons feature scores
+dat <- data.frame (feature_scores)
+ggplot (dat, aes(x = feature_scores)) + 
+  geom_histogram(binwidth=.1) + 
+  geom_vline(xintercept = median (feature_scores, na.rm = T), color = 'red', linetype = 'dashed', size = 1)
+
+# compute the scores and characterise each metagenes
+# extract top 5 for each basis
+#s <- extractFeatures(res, 5L)
+
+# extract features that have a relative basis contribution above a threshold
+s <- extractFeatures(res, 0.95, nodups = TRUE)
+str(s)
+# ambiguity?
+#extractFeatures(res, 1) # means relative contribution above 100%
+#extractFeatures(res, 1L) # means top contributing feature in each component
+```
+
+```{r}
+# plotting regulon activity scores for top selected regulons (features) per group
+annotation = column_to_rownames(annotation, var = 'TimePoint')
+
+# predicting group type
+type1 <- feature_scores[s[[1]]]
+type2 <- feature_scores[s[[2]]]
+type3 <- feature_scores[s[[3]]]
+type4 <- feature_scores[s[[4]]]
+type5 <- feature_scores[s[[5]]]
+type6 <- feature_scores[s[[6]]]
+type7 <- feature_scores[s[[7]]]
+type8 <- feature_scores[s[[8]]]
+
+# type
+type8_dat <- regulonActivity_byTimePoint_Scaled[rownames(regulonActivity_byTimePoint_Scaled) %in% names(type8), ]
+pdf ('RegulonActivity_byTimePoint_nmf_top_selected_features_type8.pdf', width = 12, height = 5)
+pheatmap::pheatmap(type8_dat, fontsize_row=5, fontsize_col = 4,  
+                   color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100), annotation= annotation, treeheight_row=10, treeheight_col=10, border_color=NA)
+dev.off()
+```
+
+
+```{r}
+# pair-wise Regulons
+# the rational is to find regulons with correlated (or anti-correlated activity scores) that have non-overlapping or minimally overlapping gene targets, this implies they are involved in regulating distinct pathways rahter than those having overlapping genes targets (probably involved in regulating similar processes)
+# from Varsha
+# Create dataframe containing TF combinations
+Reg <- readRDS("int/2.6_regulons_asIncidMat.Rds")   #TF x genes #incidMat
+R_comb <- combn(rownames(Reg), m=2)  #Create pairwise combinations
+
+# Create required dataframe 
+Reg1 = Reg2  = nR1_genes = nR2_genes = nR1_R2_genes = R1_R2_genes = NULL;
+ 
+for (comb in 1:ncol(R_comb)) {
+  #two_genes <- print(as.character(gene_comb2[,combo]))
+ 
+  two_R <- as.character(R_comb[,comb])
+  R1 <- data.frame(Reg[which(rownames(Reg) == two_R[1]),])
+  R2 <- data.frame(Reg[which(rownames(Reg) == two_R[2]),])
+  R1_2 <- cbind(R1, R2)
+  colnames(R1_2) <- c("R1", "R2")
+  nR1_2 <- length(which(R1_2[,1] > 0 & R1_2[,2] > 0))
+  R1R2_genes <- rownames(R1_2[which(R1_2[,1] > 0 & R1_2[,2] > 0),])
+  R1R2_genes <- paste(R1R2_genes,collapse=",")
+  #common_Regs <- paste(cat(rownames(samples1_2[which(samples1_2[,1] > 0 & samples1_2[,2] > 0),]), sep = “,”))
+  Reg1 = c(Reg1, two_R[1])
+  Reg2 = c(Reg2, two_R[2])
+  nR1_R2_genes = c(nR1_R2_genes, nR1_2)
+  nR1_genes = c(nR1_genes, sum(R1_2[,1]))
+  nR2_genes = c(nR2_genes, sum(R1_2[,2]))
+ R1_R2_genes = c(R1_R2_genes, R1R2_genes[1])
+ }
+ Regulon_comb <- data.frame(cbind(Reg1 ,Reg2 ,nR1_R2_genes, nR1_genes , nR2_genes ,R1_R2_genes))
+ Regulon_comb$R1_R2_genes <- as.character(Regulon_comb$R1_R2_genes)
+ Regulon_comb$R1_R2_genes[Regulon_comb$R1_R2_genes == ""] <- "NA"
+ saveRDS(Regulon_comb, file = '../data/Regulon_comb.Rds')
+
+ 
+######Plotting a Dotplot
+tab <- Regulon_comb
+tab$R1_R2_genes <- NULL
+
+#tab <- tab[subset(rownames(tab), tab$nR1_R2_genes != 0),]  #Remove TFs that do not have overlapping genes
+# I commented this line because we need to look at regulons that do not have overlapping genes but have correlated activity scores
+
+
+#Reg <- readRDS("int/2.6_regulons_asIncidMat.Rds")
+
+# Calculate percentage and incidence from the incidence matrix
+# Percentage -> proportion of overlapping genes
+# % = nR1_R2_genes/(nR1_genes + nR2_genes) - nR1_R2_genes
+
+# Incidence -> proportion of genes regulated by the TF pair out of total
+# incidence = (nR1_genes + nR2_genes - nR1_R2_genes)/number_of_genes_in_regulons
+
+tab <- tab %>% 
+cbind(percentage =(round(  as.numeric(as.character(tab$nR1_R2_genes))   /  ((as.numeric(as.character(tab$nR1_genes))+as.numeric(as.character(tab$nR2_genes))) - as.numeric(as.character(tab$nR1_R2_genes)))  ,3))*100) %>% 
+cbind(incidence = round(((as.numeric(as.character(tab$nR1_genes))+as.numeric(as.character(tab$nR2_genes))) - as.numeric(as.character(tab$nR1_R2_genes))) /ncol(Reg),3))
+
+#Remove row if Reg1 = Reg2 
+
+tab <- tab %>% separate(Reg2, c("Regulon2","suffix2"), sep = "_")
+tab <- tab %>% separate(Reg1, c("Regulon1","suffix1"), sep = "_")
+tab <- tab[subset(rownames(tab), tab$Regulon1 != tab$Regulon2),]
+
+
+#for (i in nrow(tab)){
+#if(tab[i,]$suffix1 == "extended"){
+reg1 <- paste(tab$Regulon1, tab$suffix1, sep = "_")
+#}}
+#tab[,1] <- reg1
+
+#for (i in nrow(tab)){
+#if(tab[i,]$suffix == "extended"){
+reg2 <- paste(tab$Regulon2, tab$suffix2, sep = "_")
+#}}
+#tab[,3] <- reg2
+
+#Remove NA
+reg1 <- gsub("_NA","",reg1)
+reg2 <- gsub("_NA","",reg2)
+
+#Repopulate the dataframe
+tab$Regulon1 <- reg1
+tab$Regulon2 <- reg2
+
+tab$suffix1 <- NULL
+tab$suffix2 <- NULL
+
+# commented this line because we need to look at correlated regulons by activity scores that might have non-overlapping genes
+#Keep TF pairs regulating more than 15% of overlapping genes
+#tab1 <- tab[subset(rownames(tab),tab$percentage > 20),]
+
+#Calculate correlation between TFs
+library(AUCell)
+AUC <- readRDS("int/3.4_regulonAUC.Rds") # Regulons * cells
+AUC <- getAUC(AUC)
+AUC <- cor(t(AUC), method="spearman") # potentially consider MI
+AUC <- data.frame(row=rownames(AUC)[row(AUC)], col=colnames(AUC)[col(AUC)], corr=c(AUC))
+
+AUC <- AUC %>% separate(row, c("Reg1","G1"), sep=" ")
+AUC <- AUC %>% separate(col, c("Reg2","G2"), sep=" ")
+
+colnames(AUC) [1] <- c('Regulon1')
+colnames(AUC) [3] <- c('Regulon2')
+
+AUC$G1 <- NULL
+AUC$G2 <- NULL
+
+# filter by corr based on activity score
+pos <- AUC[AUC$corr >= 0.3, ]
+neg <- AUC[AUC$corr <= -0.3, ]
+dim(pos)
+# 9042    3
+dim(neg)
+# 5000    3
+AUC_sig <- rbind (pos, neg)
+# 164836      3
+
+#Remove X_extended if X and X_extended are present in AUC_sig and tab
+#regulonNames <- AUC_sig$Regulon1
+# tfs <- gsub("_extended", "", regulonNames)
+# splitRegulons <- split(regulonNames, tfs)[unique(tfs)]
+# ret <- sapply(splitRegulons, function(x) {
+#         split(x, grepl("_extended", x))[[1]]
+#     })
+#ret_unlist <- unlist(ret)
+#ret_unname <- unname(ret_unlist)
+#AUC_sig <- AUC_sig %>% filter(Regulon1 %in% ret_unname)
+
+#regulonNames <- AUC_sig$Regulon2
+# tfs <- gsub("_extended", "", regulonNames)
+# splitRegulons <- split(regulonNames, tfs)[unique(tfs)]
+# ret <- sapply(splitRegulons, function(x) {
+#         split(x, grepl("_extended", x))[[1]]
+#     })
+#ret_unlist <- unlist(ret)
+#ret_unname <- unname(ret_unlist)
+#AUC_sig <- AUC_sig %>% filter(Regulon2 %in% ret_unname)
+
+#AUC_sig$Regulon1 <- gsub("_extended","_E",AUC_sig$Regulon1) 
+#AUC_sig$Regulon2 <- gsub("_extended","_E",AUC_sig$Regulon2)
+
+# dim(AUC_sig)
+# 11711     5
+
+# populate a table with incidence and percentage scores
+#regulonNames <- tab$Regulon1
+# tfs <- gsub("_extended", "", regulonNames)
+# splitRegulons <- split(regulonNames, tfs)[unique(tfs)]
+# ret <- sapply(splitRegulons, function(x) {
+#         split(x, grepl("_extended", x))[[1]]
+#     })
+#ret_unlist <- unlist(ret)
+#ret_unname <- unname(ret_unlist)
+#tab <- tab %>% filter(Regulon1 %in% ret_unname)
+
+#regulonNames <- tab$Regulon2
+# tfs <- gsub("_extended", "", regulonNames)
+# splitRegulons <- split(regulonNames, tfs)[unique(tfs)]
+# ret <- sapply(splitRegulons, function(x) {
+#         split(x, grepl("_extended", x))[[1]]
+#     })
+#ret_unlist <- unlist(ret)
+#ret_unname <- unname(ret_unlist)
+#tab <- tab %>% filter(Regulon2 %in% ret_unname)
+
+#tab$Regulon1 <- gsub("_extended","_E",tab$Regulon1) 
+#tab$Regulon2 <- gsub("_extended","_E",tab$Regulon2)
+
+library (tibble)
+# append incidence and percentage to AUC corr values
+rownames(AUC_sig) <- paste(AUC_sig$Regulon1, AUC_sig$Regulon2, sep = "-")  
+rownames(tab) <- paste(tab$Regulon1, tab$Regulon2, sep = "-")
+AUC_sig <- tibble ::rownames_to_column (AUC_sig, var = 'ID')
+tab <- tibble :: rownames_to_column (tab, var = 'ID')
+
+# join by ID
+dat <- inner_join(tab, AUC_sig, by = 'ID')
+#valid_rows <- rownames(tab)
+#AUC <- AUC[valid_rows,]  #Get correlation values only for required TF pairs
+# tab$corr <- AUC$corr  #Add correlation values to the dataframe
+
+
+# fct_rev to get lower triangular plot
+library (forcats)
+dat$Regulon2.y = forcats::fct_rev(factor(dat$Regulon2.y))
+
+# plot subset of dat
+high_corr <- dat[dat$corr > 0.7 | dat$corr < -0.7, ]
+low_corr <- dat[dat$corr > 0.4 | dat$corr < -0.4, ]
+low_corr = low_corr[!low_corr$ID %in% high_corr$ID, ]
+intermediate_corr <- dat[!dat$ID %in% high_corr$ID, ]; intermediate_corr <- intermediate_corr[!intermediate_corr$ID %in% low_corr$ID, ]
+# plot subset of data based on nmf types
+#interesting_regulons <-  intersect(dat$Regulon1.x, names(type8))
+#interesting_regulons_2 <- intersect(dat$Regulon2.x, names(type8))
+#interesting_regulons <- unique(append (interesting_regulons, interesting_regulons_2))
+#sub <- dat[dat$Regulon1.x %in% interesting_regulons | dat$Regulon2.x %in% interesting_regulons, ]
+# Plot
+dotplot <- ggplot2::ggplot(data = sub, mapping =  ggplot2::aes(x = Regulon1.y, y = Regulon2.y)) + 
+  #ggplot2::geom_point(mapping = ggplot2::aes(color = corr, size = ifelse(percentage==0.00, NA, percentage))) + 
+  ggplot2::geom_point(mapping = ggplot2::aes(color = corr, size = percentage)) + 
+  ggplot2::theme(axis.text.x.bottom = ggplot2::element_text(angle = 90, vjust = 0, hjust = 1, size = 4)) +
+  ggplot2::theme(axis.text.y = ggplot2::element_text(size = 4)) +
+  ggplot2::ggtitle("weakly correlated markers") + ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5)) +
+  ggplot2::scale_x_discrete(position = "bottom") + ggplot2::labs(size = 'percentage of overalapping genes', color = 'correlation between regulons activity scores')
+
+pdf("../plots/weakly_correlated_marker_regulon_across_replicate_A_dotplot.pdf", height = 10, width = 12)
+plot(dotplot)
+dev.off()
+
+```
+
+
+```{r}
+######PLotting a Network of TFs
+sub = NULL; sub = sub
+REG1 <- data.frame(Regulon1 = sub$Regulon1.x, n_genes = sub$nR1_genes)
+REG1 <- unique(REG1)
+REG2 <- data.frame(Regulon1 = sub$Regulon2.x, n_genes = sub$nR2_genes)
+REG2 <- unique(REG2)
+nodes <- unique(rbind(REG1,REG2))  #Assign TF as nodes
+rownames(nodes) <- NULL
+names(nodes) <- c("Regulons","n_genes")
+links <- data.frame(Regulon1 = sub$Regulon1.x, Regulon2 = sub$Regulon2.x, percentage = sub$percentage, corr = sub$corr) #Info on nodes and edges
+net <- graph.data.frame(d = links, vertices = nodes, directed = F)
+centrality = eigen_centrality(net)$vector  #Measure centrality
+centrality <- data.frame(centrality)
+leastcentral <- subset(rownames(centrality), centrality$centrality < (fivenum(centrality$centrality)[3]))  
+net <- delete_vertices(net, leastcentral) #Remove nodes with least centrality
+
+#Graph attributes
+V(net)$size <- as.numeric(V(net)$n_genes)*0.002
+V(net)$label.color <- "black"
+#E(net)$width <-  rescale(E(net)$corr, to = c(0.5,2.5))
+E(net)$width <-  rescale(E(net)$corr, to = c(0,2))
+#E(net)$edge.color <- c("slategrey", "dark red")[(E(net)$corr < 0)+1]
+col1 <- adjustcolor( "blue", alpha.f = 0.3) # +ve correlation
+col2 <- adjustcolor( "red", alpha.f = 0.7)  # -ve correlation
+E(net)$edge.color <- c(col1, col2)[(E(net)$corr < 0)+1]
+
+#Plot
+pdf("../plots/weakly_corrleated_markers_net.pdf")
+plot(net,vertex.label.cex = 0.5,vertex.color = "orange", edge.color = E(net)$edge.color,edge.width = E(net)$width, vertex.size = V(net)$size, vertex.label.font = 2, vertex.label.dist = 0.8)
+dev.off()
+```
+
+
+```{r}
+# use NMFEM from garmiregroup
+# http://garmiregroup.org/nmfem
+# decided not to use NMFEM clusters because they were worse than those from the base NMF package
+
+library (NMFEM)
+# use the non-scaled data, non-log transformed
+nmf_results <- nmf_subpopulation (regulonActivity_byTimePoint, n_subpop_ = 8, log_transformation_ = F, method = 'brunet')
+
+# check clustering results
+cluster_results <- data.frame (predict (nmf_results$nmf_result))
+
+# what are the genes that provided the evidence for the separation of these  clusters?
+gene_info <- nmf_results$gene_info
+
+cluster1 <- gene_info[gene_info$which_max == '1', ]
+cluster2 <- gene_info[gene_info$which_max == '2', ]
+cluster3 <- gene_info[gene_info$which_max == '3', ]
+cluster4 <- gene_info[gene_info$which_max == '4', ]
+cluster5 <- gene_info[gene_info$which_max == '5', ]
+cluster6 <- gene_info[gene_info$which_max == '6', ]
+cluster7 <- gene_info[gene_info$which_max == '7', ]
+cluster8 <- gene_info[gene_info$which_max == '8', ]
+
+# clusters
+type5_dat <- regulonActivity_byTimePoint_Scaled[rownames(regulonActivity_byTimePoint_Scaled) %in% cluster5$gene_name, ]
+pdf ('RegulonActivity_byTimePoint_nmf_top_selected_features_type5_NMFEM.pdf', width = 12, height = 5)
+pheatmap::pheatmap(type5_dat, fontsize_row=5, fontsize_col = 4,  
+                   color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100), annotation= annotation, treeheight_row=10, treeheight_col=10, border_color=NA)
+dev.off()
+
+
+```
+
+
+** *For a **quick run**, using the 'toy dataset', you may set `runSCENIC_2_createRegulons(scenicOptions, coexMethod="top5perTarget")` and only one of the RcisTarget databases. These results will not be as comprehensive as the full run, but might be enough for getting a feel of the interface.*
+
+# Optional steps: 
+
+## Binarize the network activity (regulon *on/off*)
+
+Building the GRN and scoring its activity in AUCell is often enough for datasets with very clear cell types. However, in many cases it is also useful to binarize the activity score into "on/off"; either for easier interpretation, or for maximizing the differences across cell types. It is possible to binarize only specific regulons for exploring/interpreting key TFs. However, binarizing the activity of all the regulons in the dataset allows to create the "Binarized regulon activity matrix", which can be used for upstream analysis (e.g. clustering). The binarized activity is specially useful to reduce technical biases (e.g. number of detected genes, batch effects), the grouping by patient of origin in cancer datasets, or even cross-species comparisons (see [*@aibar2017*](http://dx.doi.org/10.1038/nmeth.4463)). 
+
+To determine in which cells each regulon is active, we will use an AUC threshold. AUCell automatically calculates possible thresholds for the binarization, but they are often too conservative. We recommend to check these thresholds manually before proceeding to the binarization. This can be a iterative process, where the thresholds can be re-adjusted after an initial exploration. Once the final thresholds are selected, the cell-regulon activity will be summarized into a *binary activity matrix* in which the columns represent the cells and the rows the regulons. The coordinates of the matrix that correspond to active regulons in a given cell will contain a "1" value, and "0" all the others. 
+
+You can see the selected thresholds in the output from the previous step [file: `output/Step3_3.2_AUCtSNEs.html` (If you are using Rstudio, you might need to download the file and accompanying folder)], and these can be adjusted with AUCell's Shiny app: 
+
+```{r adjustThresholds, eval=FALSE}
+aucellApp <- plotTsne_AUCellApp(scenicOptions, logMat)
+savedSelections <- shiny::runApp(aucellApp)
+
+# Save the modified thresholds:
+newThresholds <- savedSelections$thresholds
+scenicOptions@fileNames$int["aucell_thresholds",1] <- "int/newThresholds.Rds"
+saveRDS(newThresholds, file=getIntName(scenicOptions, "aucell_thresholds"))
+saveRDS(scenicOptions, file="int/scenicOptions.Rds") 
+```
+
+Once you have optimized the thresholds, run `runSCENIC_4_aucell_binarize` to binarize the AUC, and generate some extra figures and clusterings:
+```{r binarize, eval=FALSE}
+# scenicOptions@settings$devType="png"
+runSCENIC_4_aucell_binarize(scenicOptions)
+```
+
+The t-SNEs can also be created using the binary activity matrix (in the same way as indicated in section *"Creating/comparing t-SNEs"*), just set `tsneAUC( ..., aucType="binary")` instead.
+
+
+# Export to loom/SCope
+
+The results from SCENIC can also be explored in http://scope.aertslab.org ([*@davie2018*](https://doi.org/10.1016/j.cell.2018.05.057)).
+
+The `.loom` file can be created with the function `export2scope()` (requires the package `SCopeLoomR`). This function saves the the main results from SCENIC  into a .loom file: 
+
+- Regulons 
+
+- Regulon activity (AUC matrix and thresholds)
+
+- Embeddings (e.g. t-SNE and UMAP on the regulon activity)
+
+The **motif enrichment analysis** and **co-expression modules** (e.g. GRNBoost/GENIE3 output) are stored in independent text files (mostly due to their bigger size).
+
+```{r eval=FALSE}
+# DGEM (Digital gene expression matrix)
+# (non-normalized counts)
+# exprMat <- get_dgem(open_loom(loomPath))
+# dgem <- exprMat
+# head(colnames(dgem))  #should contain the Cell ID/name
+
+# Export:
+scenicOptions@fileNames$output["loomFile",] <- "output/mouseBrain_SCENIC.loom"
+export2scope(scenicOptions, exprMat)
+```
+
+To add extra data (e.g. embeddings or clusters), see `help(package="SCopeLoomR")`.
+
+## Loading results in a .loom file
+
+`SCopeLoomR` also provides functions to import the regulons, AUC, and embeddings from the loom file. e.g.: 
+
+```{r readLoom, eval=FALSE}
+library(SCopeLoomR)
+scenicLoomPath <- getOutName(scenicOptions, "loomFile")
+loom <- open_loom(scenicLoomPath)
+
+# Read information from loom file:
+regulons_incidMat <- get_regulons(loom)
+regulons <- regulonsToGeneLists(regulons_incidMat)
+regulonsAUC <- get_regulonsAuc(loom)
+regulonsAucThresholds <- get_regulonThresholds(loom)
+embeddings <- get_embeddings(loom)
+```
+
+# Exploring/interpreting the results 
+
+The `output` folder contains several files that provide an overview of the results from each step. These results can be explored in more detail through the intermediate files (saved in the `int` folder, which can be listed with `loadInt(scenicOptions)`).
+
+Some examples on how to explore the results:
+
+## Cell states 
+
+AUCell provides the activity of the regulons across the cells. By clustering the cells based on this regulon activity (either the continuous or binary AUC matrix), we can see whether there are groups of cells that tend to have the same regulons active, and reveal the network states that are recurrent across multiple cells. These states would be equivalent to the *attractor states* of the network. Combining these clustering with different visualization methods, we can explore the **association of cell states with specific regulons**. 
+
+SCENIC provides some wrapper functions to get a quick overview. For example, projecting the AUC and TF expression onto t-SNEs, and visualizing of the AUC as heatmaps, but feel free to explore alternative clustering and visualization tools.
+
+### Projection the AUC and TF expression onto t-SNEs
+
+Briefly, a t-SNE is a 2D projection of the cells, where cells (dots) are placed close to each other if they have similar input profiles (in our case, regulon activity).
+The t-SNE usually allows to get a quick and easy overview of the cell states in the dataset. 
+Note however, that t-SNE works well to identify distinct classes, but it is not appropiate for dinamic/continuous processes (e.g. trajectory-like visualizations).
+
+AUCell's interactive app *(for [SCope](http://scope.aertslab.org), see section "Export to loom/SCope")*:
+```{r aucellApp2, eval=FALSE}
+logMat <- exprMat # Better if it is logged/normalized
+aucellApp <- plotTsne_AUCellApp(scenicOptions, logMat) # default t-SNE
+savedSelections <- shiny::runApp(aucellApp)
+```
+
+`AUCell_plotTSNE()` to save static plots:
+```{r tsneTfExpression, fig.height=6, fig.width=8}
+print(tsneFileName(scenicOptions))
+tSNE_scenic <- readRDS(tsneFileName(scenicOptions))
+aucell_regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC")
+
+# Show TF expression:
+par(mfrow=c(2,3))
+AUCell::AUCell_plotTSNE(tSNE_scenic$Y, exprMat, aucell_regulonAUC[onlyNonDuplicatedExtended(rownames(aucell_regulonAUC))[c("Dlx5", "Sox10", "Sox9","Irf1", "Stat6")],], plots="Expression")
+```
+
+```{r tsneAUC_overview, eval=FALSE}
+# Save AUC as PDF:
+Cairo::CairoPDF("output/Step4_BinaryRegulonActivity_tSNE_colByAUC.pdf", width=20, height=15)
+par(mfrow=c(4,6))
+AUCell::AUCell_plotTSNE(tSNE_scenic$Y, cellsAUC=aucell_regulonAUC, plots="AUC")
+dev.off()
+```
+
+Density plot to detect most likely stable states (higher-density areas in the t-SNE):
+```{r tSNE_density, fig.height=4, fig.width=4}
+library(KernSmooth)
+library(RColorBrewer)
+dens2d <- bkde2D(tSNE_scenic$Y, 1)$fhat
+image(dens2d, col=brewer.pal(9, "YlOrBr"), axes=FALSE)
+contour(dens2d, add=TRUE, nlevels=5, drawlabels=FALSE)
+```
+
+Show several regulons simultaneously:
+```{r tSNE_3cols, fig.height=4, fig.width=8}
+#par(bg = "black")
+par(mfrow=c(1,2))
+
+regulonNames <- c( "Dlx5","Sox10")
+cellCol <- plotTsne_rgb(scenicOptions, regulonNames, aucType="AUC", aucMaxContrast=0.6)
+text(0, 10, attr(cellCol,"red"), col="red", cex=.7, pos=4)
+text(-20,-10, attr(cellCol,"green"), col="green3", cex=.7, pos=4)
+
+regulonNames <- list(red=c("Sox10", "Sox8"),
+                     green=c("Irf1"),
+                     blue=c( "Tef"))
+cellCol <- plotTsne_rgb(scenicOptions, regulonNames, aucType="Binary")
+text(5, 15, attr(cellCol,"red"), col="red", cex=.7, pos=4)
+text(5, 15-4, attr(cellCol,"green"), col="green3", cex=.7, pos=4)
+text(5, 15-8, attr(cellCol,"blue"), col="blue", cex=.7, pos=4)
+```
+
+## GRN: Regulon targets and motifs
+
+**Genes included in the regulons**: 
+
+```{r seeRegulons}
+regulons <- loadInt(scenicOptions, "regulons")
+regulons[c("Dlx5", "Irf1")]
+```
+
+Note than only regulons with 10 genes or more are scored with AUCell: 
+```{r seeRegulons2}
+regulons <- loadInt(scenicOptions, "aucell_regulons")
+head(cbind(onlyNonDuplicatedExtended(names(regulons))))
+```
+
+Details on the TF-target links: For each TF-target pair, the stats from the intermediate steps are summarized in `loadInt(scenicOptions, "regulonTargetsInfo")` (saved as text in: `getOutName(scenicOptions, "s2_regulonTargetsInfo")`: `r getOutName(scenicOptions, "s2_regulonTargetsInfo")`). This table can be used to explore the support to specific links. Since it will typically contain several thousand rows (in this run: `r nrow(loadInt(scenicOptions, "regulonTargetsInfo"))`), in most cases it is advisable to subset it before exporting it as HTML.
+
+```{r motifEnrichmentDT}
+regulonTargetsInfo <- loadInt(scenicOptions, "regulonTargetsInfo")
+tableSubset <- regulonTargetsInfo[TF=="Stat6" & highConfAnnot==TRUE]
+viewMotifs(tableSubset) 
+```
+
+
+The full list of **TF motifs** supporting the regulons can be seen in the restuls from **RcisTarget motif enrichment results** (for the co-expression modules). These are saved in `motifEnrichment_selfMotifs_wGenes`.
+A preview of these results is exported as html in *`r getOutName(scenicOptions, "s2_motifEnrichmentHtml")`* (and as text in: *`r getOutName(scenicOptions, "s2_motifEnrichment")`*).
+
+Alternative tables, showing more or fewer rows/columns could be generated modifiying this code: 
+
+```{r motifEnrichmentDTsubset, eval=FALSE}
+motifEnrichment_selfMotifs_wGenes <- loadInt(scenicOptions, "motifEnrichment_selfMotifs_wGenes")
+tableSubset <- motifEnrichment_selfMotifs_wGenes[highlightedTFs=="Dlx5"]
+viewMotifs(tableSubset) 
+```
+
+
+## Regulators for clusters or known cell types
+
+The regulatory analysis from SCENIC can be combined with other analyses, for example clustering, or focus on regulators for specific cell types. There are multiple options to do these analyses (your imagination is the limit!). 
+Here are some quick examples to start:
+
+- **Average Regulon Activity** by cluster
+
+(Clusters could also be used instead of "cell types", e.g. with Seurat: `cellInfo <- data.frame(seuratCluster=Idents(seuratObject))`)
+
+```{r}
+regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC")
+regulonAUC <- regulonAUC[onlyNonDuplicatedExtended(rownames(regulonAUC)),]
+regulonActivity_byCellType <- sapply(split(rownames(cellInfo), cellInfo$CellType),
+                                     function(cells) rowMeans(getAUC(regulonAUC)[,cells]))
+regulonActivity_byCellType_Scaled <- t(scale(t(regulonActivity_byCellType), center = T, scale=T))
+
+pheatmap::pheatmap(regulonActivity_byCellType_Scaled, #fontsize_row=3, 
+                   color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),
+                   treeheight_row=10, treeheight_col=10, border_color=NA)
+                   # filename="regulonActivity_byCellType.pdf", width=10, height=20)
+
+topRegulators <- reshape2::melt(regulonActivity_byCellType_Scaled)
+colnames(topRegulators) <- c("Regulon", "CellType", "RelativeActivity")
+topRegulators <- topRegulators[which(topRegulators$RelativeActivity>0),]
+viewTable(topRegulators)
+```
+
+- Binarized version (**~ percentage** of cells of that cell type/cluster with the regulon active)
+```{r}
+minPerc <- .7
+binaryRegulonActivity <- loadInt(scenicOptions, "aucell_binary_nonDupl")
+cellInfo_binarizedCells <- cellInfo[which(rownames(cellInfo)%in% colnames(binaryRegulonActivity)),, drop=FALSE]
+regulonActivity_byCellType_Binarized <- sapply(split(rownames(cellInfo_binarizedCells), cellInfo_binarizedCells$CellType), 
+                                               function(cells) rowMeans(binaryRegulonActivity[,cells, drop=FALSE]))
+binaryActPerc_subset <- regulonActivity_byCellType_Binarized[which(rowSums(regulonActivity_byCellType_Binarized>minPerc)>0),]
+pheatmap::pheatmap(binaryActPerc_subset, # fontsize_row=5, 
+                   color = colorRampPalette(c("white","pink","red"))(100), breaks=seq(0, 1, length.out = 100),
+                   treeheight_row=10, treeheight_col=10, border_color=NA)
+                   #filename="regulonActivityBinary_byCellType.pdf", width=10, height=20)
+
+topRegulators <- reshape2::melt(regulonActivity_byCellType_Binarized)
+colnames(topRegulators) <- c("Regulon", "CellType", "RelativeActivity")
+topRegulators <- topRegulators[which(topRegulators$RelativeActivity>minPerc),]
+viewTable(topRegulators)
+```
+
+- Visualizing the regulon activities on **embeddings/trajectories** calculated with other methods...
+```{r eval=FALSE}
+library(Seurat)
+dr_coords <- Embeddings(seuratObject, reduction="tsne")
+
+tfs <- c("Sox10","Irf1","Sox9", "Dlx5")
+par(mfrow=c(2,2))
+AUCell::AUCell_plotTSNE(dr_coords, cellsAUC=selectRegulons(regulonAUC, tfs), plots = "AUC")
+```
+
+
+
+# SessionInfo
+```{r sessionInfo}
+date()
+sessionInfo()
+```

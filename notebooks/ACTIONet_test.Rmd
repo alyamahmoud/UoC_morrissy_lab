@@ -1,0 +1,130 @@
+---
+title: "Run ACTIONet and SCINET on brain data"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+require(SingleCellExperiment)
+require(ACTIONet)
+require (SCINET)
+```
+
+## Load data
+```{r}
+sce = readRDS('brain.data.A.Rds')
+```
+
+## Convert seurat object to SingleCellExperiment object
+```{r}
+sce.se <- as.SingleCellExperiment (sce)
+```
+
+## Run ACTIONet
+```{r}
+sce.reduced = reduce.sce(sce.se, reduced_dim = 50)
+ACTIONet.out = run.ACTIONet(sce.reduced, k_max = 20)
+```
+
+## Export results for future use
+```{r}
+saveRDS(sce.reduced, file = 'reduced_sce_brain_data_A.RDS')
+saveRDS(ACTIONet.out, file = 'ACTIONet_out_brain_data_A.RDS')
+```
+
+## Preprocessing using ACTIONet framework
+```{r message=FALSE, warning=FALSE}
+sce = readRDS('reduced_sce_brain_data_A.RDS')
+ACTIONet.out = readRDS('ACTIONet_out_brain_data_A.RDS')
+# For testing purposes
+#Bcell.cols = which(sce$Labels == "B cell")
+#marker.genes = c('CD19', 'CD22', 'CD4', 'CD8A', 'CD14')
+#marker.rows = match(marker.genes, rownames(sce))
+e10 = which (sce$CellType == 'e10A')
+e11 = which (sce$CellType == 'e11A')
+e12 = which (sce$CellType == 'e12A')
+e13 = which (sce$CellType == 'e13A')
+e14 = which (sce$CellType == 'e14A')
+e15 = which (sce$CellType == 'e15A')
+e16 = which (sce$CellType == 'e16A')
+e17 = which (sce$CellType == 'e17A')
+P0O = which (sce$CellType == 'P0OA')
+P04 = which (sce$CellType == 'P04A')
+P07 = which(sce$CellType == 'P07A')
+P10 = which (sce$CellType == 'P10A')
+
+#marker.genes <- c("Sox9", "Sox10", "Dlx5", "Cic", "Etv5", "Jun", "Fos", "Hes5", "Slc1a3", "Pax6", "Meis2", "Lhx5", "Pax2", "Calb1", "Lmx1a", "Msx1", "Id1", "Msx3", "Atoh1", "Pax6", "Meis2", "Lhx2", "Lhx1", "Lhx5", "Pax2", "Lbx1", "Calb1", "Car8", "Sox10", "Olig1", "Tmem119", "Itgam", "Hopx", "Gdf10", "Tlx3", "Hba-a2", "Alas2", "Hbb-bt", "Cd34", "Pecam1", "Foxc1", "Dynlrb2", "Meig1", "Pax6", "Zic1", "Neurod1", "Meis2", "Lhx9", "Atoh1", "Barhl2", "Insm1", "Klf4", "Neurod1", "Pax6", "Sp5", "Pbx3", "Sox4", "Neurod6", "Pax5", "Nhlh2", "Ebf1", "Meis2", "Meis3", "Tcf3", "Id2", "Atoh1", "Tcf4", "Nhlh2", "Sox11", "Evx1", "Lhx9", "Pax6", "Ybx1", "Sp5", "Ptf1a", "Fos", "Bcan", "Eomes", "Cxcr4")
+```
+
+```{r}
+# visualisation of ACTIONet.out
+marker.genes <- list ('Granule' = c('Selm','Pax6','Mfap4','NeuroD1','Atoh1','Barhl1','Ppp2r2c'), 'NTZ'= c('Tmem163','Meis2','Lhx2','Lhx9','Grem2','Gng8','Evx1'),  'GABA'= c('Lhx5','Lhx1','Gad2','Gad1', 'Foxp2', 'Pax2', 'Lbx1', 'Optc', 'Gm27199','Slc32a1'), 'Progenitor' = c('Sparc', 'Nes', 'Id1', 'Id3', 'Hes5', 'Msx3'), 'Purkinje' = c('Car8','Calb1','Pcp2','Rora'), 'Glia' = c('Aldh1l1', 'Aldoc', 'Hopx', 'Timp4', 'Ndrg2', 'Gdf10', 'Sox9', 'Slc1a3', 'Sparcl1')) 
+marker.rows = match(marker.genes, rownames(sce))
+
+annot.out = annotate.cells.using.markers(ACTIONet.out = ACTIONet.out, sce = sce.reduced, 
+    marker.genes = marker.genes)
+sce.reduced$Labels = annot.out$annotations$`InferredCelltypes_2019-11-15 13:01:23`$Labels
+visualize.markers(ACTIONet.out, sce.reduced, marker.genes = c('Selm','Pax6','Mfap4','NeuroD1','Atoh1','Barhl1','Ppp2r2c','Tmem163','Meis2','Lhx2','Lhx9','Grem2','Gng8','Evx1', 'Lhx5','Lhx1','Gad2','Gad1', 'Foxp2', 'Pax2', 'Lbx1', 'Optc', 'Gm27199','Slc32a1', 'Sparc', 'Nes', 'Id1', 'Id3', 'Hes5', 'Msx3', 'Car8','Calb1','Pcp2','Rora', 'Car8','Calb1','Pcp2','Rora', 'Aldh1l1', 'Aldoc', 'Hopx', 'Timp4', 'Ndrg2', 'Gdf10', 'Sox9', 'Slc1a3', 'Sparcl1' ))
+plot.ACTIONet(ACTIONet.out, labels=sce.reduced$Labels, transparency.attr = annot.out$Labels.confidence)
+plot.ACTIONet(ACTIONet.out)
+plot.ACTIONet(ACTIONet.out, labels = sce.reduced$Labels, transparency.attr = annot.out$Labels.confidence)
+```
+
+
+## Imputation
+```{r}
+W = ACTIONet.out$signature.profile[, ACTIONet.out$core.out$core.archs]
+H = ACTIONet.out$reconstruct.out$H_stacked[ACTIONet.out$core.out$core.archs, ]
+A =  W %*% H
+```
+
+## Estimate gene activity score within B-cell sub-population
+```{r}
+# It can be any imputed profile
+activity.scores = SCINET::compute_gene_activities(A = A, samples = e10, thread_no = 8)
+X = t(activity.scores[marker.rows, ])
+colnames(X) = marker.genes
+df = reshape2::melt(X)
+colnames(df) = c('id', 'gene', 'activity')
+saveRDS(activity.scores, file = 'GeneActivityScores.Rds')
+
+require(ggplot2)
+pdf ('test.pdf')
+ggplot(df_e10, aes(x=activity, fill=gene)) +
+  geom_density()
+
+```
+
+```{r}
+# converting PCNet to mouse format
+dat <- read.delim ('/home/alyaa.mohamed/scratch/mart_export-2.txt', stringsAsFactors = FALSE)
+human2mouse <- dat[!duplicated(dat$Gene.name), ]
+dat <- human2mouse
+dat_mouse = dat[!dat$Algerian.mouse.gene.name == "", ]
+common = intersect(rownames(PCNet), dat_mouse$Gene.name)
+PCNet_mouse <- PCNet[common, common]
+rownames(PCNet_mouse)[rownames(PCNet_mouse) %in% dat_mouse$Gene.name]<-dat_mouse$Algerian.mouse.gene.name
+colnames(PCNet_mouse)[colnames(PCNet_mouse) %in% dat_mouse$Gene.name]<-dat_mouse$Algerian.mouse.gene.name
+
+# next
+PCNet_mouse <- readRDS('PCNet_mouse.Rds')
+PCNet = PCNet_mouse
+```
+
+
+
+
+
+
+
+
+
+
+
+

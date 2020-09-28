@@ -1,0 +1,205 @@
+---
+title: "H3K27ac_motifs_TFBS"
+author: "am"
+date: "27/01/2020"
+output: html_document
+---
+
+```{r}
+# determining if the adjusted p value is too stringent 
+dat <- read.delim ('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/microglia_motifs_genes_output.bed', header = FALSE, stringsAsFactors = FALSE)
+dim(dat)
+range(dat$V16)
+
+#length (intersect(unique(union (jun$GENEID, junb$GENEID)), unique(dat$V13)))
+length (intersect(unique(Srf$GENEID), unique(dat$V13)))
+
+
+dat_100kb=dat
+dat_100kb = na.omit(dat_100kb)
+dat_100kb$V16 = abs(dat_100kb$V16)
+range(dat_100kb$V16)
+
+dat_less_than_100kb = dat_100kb[dat_100kb$V16 <= 100000, ]
+dim(dat_less_than_100kb)
+head (dat_less_than_100kb)
+
+#length (intersect(unique(union (jun$GENEID, junb$GENEID)), unique(dat_less_than_100kb$V13)))
+length (intersect(unique(Srf$GENEID), unique(dat_less_than_100kb$V13)))
+
+write.table (dat_less_than_100kb, file = '../data/TFBS/microglia_motifs_genes_output_padjusted_distance_less_than_100kb.bed', sep = '\t', quote = FALSE, row.names = FALSE, col.names = FALSE)
+```
+
+```{r}
+setwd('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/')
+dat = NULL; 
+dat = read.delim ('microglia_motifs_genes_output_padjusted_distance_less_than_100kb_negative_H3K27ac_roadmap.output.bed', header = FALSE, stringsAsFactors=FALSE)
+
+# keep only those less than 500 bp away from TSS
+# just for the promoters part
+dat <- dat[dat$V16 < 500, ]
+
+
+Egr1 = read.delim ('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/microglia_Egr1.txt')
+dim(Egr1)
+Egr1_dat = dat[dat$V8 == 'EGR1', ]
+length (unique(Egr1_dat$V13))
+Egr1_dat = Egr1_dat[Egr1_dat$V13 %in% Egr1$GENEID, ]
+length (unique(Egr1_dat$V13))
+#dim(Egr1_dat)
+write.table(unique(Egr1_dat$V13), file = '/Users/alyaamahmoud/Documents/GRNs/data/TFBS/promoters/mouse/Egr1_dat_mouse.txt', sep = '\t', quote= FALSE, row.names = FALSE, col.names = FALSE)
+
+
+Egr2 = read.delim ('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/microglia_Egr2.txt')
+length (unique(Egr2$GENEID))
+Egr2_dat = dat[dat$V8 == 'EGR2', ]
+length (unique(Egr2_dat$V13))
+Egr2_dat = Egr2_dat[Egr2_dat$V13 %in% Egr2$GENEID, ]
+length (unique(Egr2_dat$V13))
+#dim(Egr2_dat)
+write.table(unique(Egr2_dat$V13), file = '/Users/alyaamahmoud/Documents/GRNs/data/TFBS/promoters/mouse/Egr2_dat_mouse.txt', sep = '\t', quote= FALSE, row.names = FALSE, col.names = FALSE)
+
+
+Egr4 = read.delim ('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/microglia_Egr4.txt')
+length (unique(Egr4$GENEID))
+Egr4_dat = dat[dat$V8 == 'EGR4', ]
+length (unique(Egr4_dat$V13))
+Egr4_dat = Egr4_dat[Egr4_dat$V13 %in% Egr4$GENEID, ]
+length (unique(Egr4_dat$V13))
+#dim(Egr4_dat)
+write.table(unique(Egr4_dat$V13), file = '/Users/alyaamahmoud/Documents/GRNs/data/TFBS/promoters/mouse/Egr4_dat_mouse.txt', sep = '\t', quote= FALSE, row.names = FALSE, col.names = FALSE)
+
+
+Elk3 = read.delim ('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/microglia_Elk3.txt')
+length (unique(Elk3$GENEID))
+Elk3_dat = dat[dat$V8 == 'ELK3', ]
+length (unique(Elk3_dat$V13))
+Elk3_dat = Elk3_dat[Elk3_dat$V13 %in% Elk3$GENEID, ]
+length (unique(Elk3_dat$V13))
+#dim(Elk3_dat)
+write.table(unique(Elk3_dat$V13), file = '/Users/alyaamahmoud/Documents/GRNs/data/TFBS/promoters/mouse/Elk3_dat_mouse.txt', sep = '\t', quote= FALSE, row.names = FALSE, col.names = FALSE)
+
+
+
+Ets1 = read.delim ('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/microglia_Ets1.txt')
+length (unique(Ets1$GENEID))
+Ets1_dat = dat[dat$V8 == 'ETS1', ]
+length (unique(Ets1_dat$V13))
+Ets1_dat = Ets1_dat[Ets1_dat$V13 %in% Ets1$GENEID, ]
+length (unique(Ets1_dat$V13))
+#dim(Ets1_dat)
+write.table(unique(Ets1_dat$V13), file = '/Users/alyaamahmoud/Documents/GRNs/data/TFBS/promoters/mouse/Ets1_dat_mouse.txt', sep = '\t', quote= FALSE, row.names = FALSE, col.names = FALSE)
+
+
+Fos = read.delim ('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/microglia_Fos.txt')
+length (unique(Fos$GENEID))
+Fosb = read.delim ('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/microglia_Fosb.txt')
+length (unique(Fosb$GENEID))
+FOSTFs = c('FOS', 'FOS::JUN(var.2)',  'FOS::JUND', 'FOSB::JUN', 'FOSL1::JUN', 
+'FOSL1::JUNB',  'FOSL2::JUN', 'FOSL2::JUN(var.2)','FOSL2::JUNB(var.2)')
+Fos_dat = dat[dat$V8 %in% FOSTFs, ]
+length (unique(Fos_dat$V13))
+Fos_dat = Fos_dat[Fos_dat$V13 %in% Fos$GENEID, ]
+Fosb_dat = Fos_dat[Fos_dat$V13 %in% Fosb$GENEID, ]
+length(unique(union (Fosb_dat$V13, Fos_dat$V13)))
+write.table(unique(union (Fosb_dat$V13, Fos_dat$V13)), file = '/Users/alyaamahmoud/Documents/GRNs/data/TFBS/promoters/mouse/Fos_Fosb_dat_mouse.txt', sep = '\t', quote= FALSE, row.names = FALSE, col.names = FALSE)
+
+
+jun = read.delim ('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/microglia_Jun.txt')
+junb = read.delim ('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/microglia_Junb.txt')
+length (unique(union (unique(jun$GENEID), unique(junb$GENEID))))
+FOSTFs = c('FOS::JUN(var.2)',  'FOS::JUND', 'FOSB::JUN', 'FOSL1::JUN', 
+'FOSL1::JUNB',  'FOSL2::JUN', 'FOSL2::JUN(var.2)','FOSL2::JUNB(var.2)', 'JUN','JUN::JUNB(var.2)', 'JUN(var.2)','JUNB', 'JUNB(var.2)', 'BATF::JUN')
+jun_dat = dat[dat$V8 %in% FOSTFs, ]
+length (unique(jun_dat$V13))
+jun_dat = jun_dat[jun_dat$V13 %in% jun$GENEID, ]
+junb_dat = jun_dat[jun_dat$V13 %in% junb$GENEID, ]
+length (unique(union (unique(jun_dat$V13), unique(junb_dat$V13))))
+write.table(unique(union (junb_dat$V13, jun_dat$V13)), file = '/Users/alyaamahmoud/Documents/GRNs/data/TFBS/promoters/mouse/jun_junb_dat_mouse.txt', sep = '\t', quote= FALSE, row.names = FALSE, col.names = FALSE)
+
+
+Maff = read.delim ('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/microglia_Maff.txt')
+length (unique(Maff$GENEID))
+Maff_dat = dat[dat$V8 == 'MAFF', ]
+length (unique(Maff_dat$V13))
+Maff_dat = Maff_dat[Maff_dat$V13 %in% Maff$GENEID, ]
+#dim(Maff_dat)
+length (unique(Maff_dat$V13))
+write.table(unique(Maff_dat$V13), file = '/Users/alyaamahmoud/Documents/GRNs/data/TFBS/promoters/mouse/Maff_dat_mouse.txt', sep = '\t', quote= FALSE, row.names = FALSE, col.names = FALSE)
+
+
+Srf = read.delim ('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/microglia_Srf.txt')
+length (unique(Srf$GENEID))
+Srf_dat = dat[dat$V8 == 'SRF', ]
+length (unique(Srf_dat$V13))
+Srf_dat = Srf_dat[Srf_dat$V13 %in% Srf$GENEID, ]
+length (unique(Srf_dat$V13))
+write.table(unique(Srf_dat$V13), file = '/Users/alyaamahmoud/Documents/GRNs/data/TFBS/promoters/mouse/Srf_dat_mouse.txt', sep = '\t', quote= FALSE, row.names = FALSE, col.names = FALSE)
+
+
+```
+```{r}
+# visualise overlap/specific regions across the three datasets (mouse, adult, fetal)
+library (UpSetR)
+
+EGR1_fetal = read.delim ('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/fetal/Egr1_dat_fetal.txt', header = FALSE, stringsAsFactors = FALSE); EGR1_fetal = EGR1_fetal$V1
+EGR1_adult = read.delim ('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/roadmap/Egr1_dat_fetal.txt', header = FALSE, stringsAsFactors = FALSE); EGR1_adult = EGR1_adult$V1
+EGR1_mouse = read.delim ('/Users/alyaamahmoud/Documents/GRNs/data/TFBS/mouse/Egr1_dat_fetal.txt', header = FALSE, stringsAsFactors = FALSE); EGR1_mouse = EGR1_mouse$V1
+
+# venn diagram
+venn.diagram(
+        x = list(EGR1_adult, EGR1_fetal, EGR1_mouse),
+        category.names = c("adult" , "fetal " , "mouse"),
+        filename = '/Users/alyaamahmoud/Documents/GRNs/data/TFBS/EGR1.png',
+        output=TRUE,
+        
+        # Output features
+        imagetype="png" ,
+        height = 480 , 
+        width = 480 , 
+        resolution = 300,
+        compression = "lzw",
+        
+        # Circles
+        lwd = 2,
+        lty = 'blank',
+        fill = myCol,
+        
+        # Numbers
+        cex = .6,
+        fontface = "bold",
+        fontfamily = "sans",
+        
+        # Set names
+        cat.cex = 0.6,
+        cat.fontface = "bold",
+        cat.default.pos = "outer",
+        cat.pos = c(-27, 27, 135),
+        cat.dist = c(0.055, 0.055, 0.085),
+        cat.fontfamily = "sans",
+        rotation = 1
+)
+
+
+```
+
+```{r}
+# visualise frequencies of each TF occurence as per H3K27ac /intersect/motifs /intersect/ genes
+tfs_h3k27ac <- read.delim ('freuqnecies_of_TFs_occurence_microglia_motifs_genes_filtered_H3K27ac_fetal.txt', stringsAsFactors =FALSE)
+colnames(tfs_h3k27ac) = c('TF', 'SCENIC', 'FIMO', 'H3K27ac_pipeline', 'retained')
+tfs_h3k27ac <- tfs_h3k27ac[order(tfs_h3k27ac$SCENIC, decreasing = TRUE), ]
+df = reshape2::melt(tfs_h3k27ac)
+library (ggplot2)
+pdf ('freuqnecies_of_TFs_occurence_microglia_motifs_genes_filtered_H3K27ac_fetal.pdf', width = 10)
+ggplot(data=df, aes(x=TF, y=value, fill=variable, label = value)) + 
+  geom_bar(stat="identity") + 
+  geom_text(size=3, position = position_stack(vjust=0.5))
+dev.off()
+```
+
+```{r}
+# separate promoters 
+dat = NULL; 
+dat = read.delim ('../data/TFBS/microglia_motifs_genes_output_padjusted_distance_less_than_100kb.bed', header = FALSE, stringsAsFactors = FALSE)
+```
+

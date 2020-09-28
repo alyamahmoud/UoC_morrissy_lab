@@ -1,0 +1,52 @@
+---
+title: "bulk rnaseq no filted (cf. using only deg"
+author: "am"
+date: "14/02/2020"
+output: html_document
+---
+## this is to compare expression level of target genes in regulons derived from analysing individual patients vs two patients comobined through the SCENI pipeline
+
+## SCENIC was run on arc, scripts run_SCENIC.slurm calls SCENIC_bulk_rnaseq.R
+
+```{r}
+auc_tumor = readRDS('~/Documents/GRNs/data/tumor_data/proteomics_data/int_smp20_21//3.4_regulonAUC.Rds')
+
+regulons_tumor = readRDS('~/Documents/GRNs/data/tumor_data/proteomics_data/int_smp20_21//2.6_regulons_asGeneSet.Rds')
+```
+
+```{r}
+# annotations
+dat = data.frame(auc_tumor@assays$data@listData)
+cellInfo = data.frame(colnames(dat))
+cellInfo$patient = c(rep ('SMP20', 8), rep ('SMP21', 8), rep ('SMP20', 2), rep ('SMP21', 2), rep ('SMP20', 2), rep ('SMP21', 2))
+cellInfo <- column_to_rownames(cellInfo, var = 'colnames.dat.')
+saveRDS(cellInfo, file = '~/Documents/GRNs/data/tumor_data/proteomics_data/int_smp20_21//cellInfo.Rds')
+```
+
+
+```{r}
+# check expression of regulons for invidiual samples and for tumor samples in one run
+dat = data.frame(auc_tumor@assays$data@listData)
+colnames(dat) = rownames(cellInfo)
+rownames(dat) = sapply(strsplit(rownames(dat), " "), head, 1)
+
+pdf ('~/Documents/GRNs/data/tumor_data/proteomics_data/int_smp20_21/Step3_RegulonActivity_heatmap_regulonAUC.pdf', height = 6, width = 5)
+dat = na.omit(t(scale(t(as.matrix(dat)), center = T, scale=T)))
+pheatmap::pheatmap(dat, fontsize_row=5, color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = cellInfo, clustering_method = "ward.D2", fontsize_col = 6)
+dev.off()
+```
+
+```{r}
+# remove the word extended and them remove duplicated 
+proteomics_dat_20_21 = dat
+proteomics_dat_20_21 <- data.frame(proteomics_dat_20_21) 
+proteomics_dat_20_21 <- rownames_to_column(proteomics_dat_20_21) 
+proteomics_dat_20_21$rowname <- gsub ("_extended",  "", proteomics_dat_20_21$rowname)
+proteomics_dat_20_21 <- proteomics_dat_20_21[!duplicated (proteomics_dat_20_21$rowname), ]
+rownames(proteomics_dat_20_21) <- NULL
+proteomics_dat_20_21 <- column_to_rownames(proteomics_dat_20_21, var = 'rowname')
+pdf ('~/Documents/GRNs/data/tumor_data/proteomics_data/int_smp20_21/Step3_RegulonActivity_heatmap_regulonAUC_mod_labels.pdf', height = 6, width = 5)
+pheatmap::pheatmap(proteomics_dat_20_21, fontsize_row=3, color=colorRampPalette(c("blue","white","red"))(100), breaks=seq(-3, 3, length.out = 100),treeheight_row=10, treeheight_col=10, border_color=NA, annotation = cellInfo, clustering_method = "ward.D2", fontsize_col = 6)
+dev.off()
+```
+
